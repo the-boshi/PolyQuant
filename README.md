@@ -2,14 +2,13 @@
 
 ## Overview
 PolyQuant is a machine-learning pipeline for modeling **trade-level predictive edge** in the Polymarket prediction-market ecosystem.  
-Each trade is transformed into a rich feature vector representing:
+Each trade is transformed into a feature vector representing:
 
-- user behavior
-- market microstructure
+- user behavior statistics
+- market behavior statistics
 - rolling 1h windows
 - user-in-market dynamics
 - time / temporal context
-- calibrated price-based signals
 
 The goal is to predict:
 
@@ -109,12 +108,10 @@ Each trade is converted into ~40 features grouped into:
 - time since user last traded in this market  
 
 ### Labels
-Two labels per trade:
+The ourcome of the market:
 
 ```
-p = 1 if final_outcome == YES else 0
-y = p
-edge = final_outcome_price − trade_price
+y = final_outcome_price
 ```
 
 For training the MLP:
@@ -122,7 +119,7 @@ For training the MLP:
 ```
 target = y
 loss    = BCEWithLogitsLoss
-metric  = edge_MAE (|pred_edge − true_edge|)
+metric  = misclassification (y greater or lesser than 0.5)
 ```
 
 ---
