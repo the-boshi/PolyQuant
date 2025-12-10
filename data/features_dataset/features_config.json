@@ -1,0 +1,192 @@
+{
+  "trade_uid": {
+    "type": "string",
+    "description": "Unique ID of the trade."
+  },
+  "user_id": {
+    "type": "string",
+    "description": "User’s proxy wallet."
+  },
+  "market_id": {
+    "type": "string",
+    "description": "Condition_id of the market."
+  },
+  "timestamp": {
+    "type": "int",
+    "description": "Unix timestamp of trade."
+  },
+
+  "edge": {
+    "type": "float",
+    "description": "outcome_final_price - trade_price (label)."
+  },
+
+
+  "price": {
+    "type": "float",
+    "description": "Trade price (0–1)."
+  },
+  "log_usdc_size": {
+    "type": "float",
+    "description": "log1p(abs(usdc_size))."
+  },
+  "outcome_index": {
+    "type": "int",
+    "description": "1=YES, 0=NO (Polymarket convention)."
+  },
+  "seconds_since_market_open": {
+    "type": "float",
+    "description": "max(0, ts - market.start_ts)."
+  },
+  "time_of_day_sin": {
+    "type": "float",
+    "description": "sin(2π * (ts mod 1day)/1day)."
+  },
+  "time_of_day_cos": {
+    "type": "float",
+    "description": "cos(2π * (ts mod 1day)/1day)."
+  },
+
+
+  "user_time_since_first_trade": {
+    "type": "float",
+    "description": "ts - user_state.first_ts."
+  },
+  "market_time_since_first_trade": {
+    "type": "float",
+    "description": "ts - market_state.first_ts."
+  },
+
+
+  "user_total_trades_before": {
+    "type": "int",
+    "description": "Count of user trades prior to this trade."
+  },
+  "user_total_volume_before": {
+    "type": "float",
+    "description": "Lifetime total abs(usdc_size) before this trade."
+  },
+  "user_days_active_before": {
+    "type": "int",
+    "description": "Unique days on which the user traded."
+  },
+  "user_avg_size_before": {
+    "type": "float",
+    "description": "Mean absolute size of user trades (Welford)."
+  },
+  "user_std_size_before": {
+    "type": "float",
+    "description": "Stddev of abs(size) (Welford)."
+  },
+  "user_historical_pnl_before": {
+    "type": "float",
+    "description": "Sum of edges for markets already closed."
+  },
+  "user_historical_winrate_before": {
+    "type": "float",
+    "description": "Wins / (wins+losses) for closed markets only."
+  },
+  "user_recent_pnl_last20": {
+    "type": "float",
+    "description": "Sum of user’s last 20 realized edges (closed markets only)."
+  },
+  "user_activity_burstiness": {
+    "type": "float",
+    "description": "Variance of recent intertrade intervals."
+  },
+  "user_pnl_std_before": {
+    "type": "float",
+    "description": "Stddev of realized edges (Welford)."
+  },
+  "time_since_user_last_trade": {
+    "type": "float",
+    "description": "ts - user.last_ts, or -1 if first trade."
+  },
+
+
+  "market_total_trades_before": {
+    "type": "int",
+    "description": "Total trades in market up to this point."
+  },
+  "market_total_volume_before": {
+    "type": "float",
+    "description": "Lifetime total USDC volume before this trade."
+  },
+  "market_volume_last_1h": {
+    "type": "float",
+    "description": "Sum of abs(usdc_size) of last 1h window."
+  },
+  "num_unique_traders_last_1h": {
+    "type": "int",
+    "description": "Unique traders active in last 1h."
+  },
+  "market_volatility_1h": {
+    "type": "float",
+    "description": "Stddev of price in 1h window."
+  },
+  "mean_trade_size_1h": {
+    "type": "float",
+    "description": "Average abs(size) in last 1h."
+  },
+  "size_ratio_market": {
+    "type": "float",
+    "description": "abs(size) / mean_trade_size_1h."
+  },
+
+  "last_price_yes": {
+    "type": "float",
+    "description": "Most recent YES price before this trade (0 if none)."
+  },
+  "last_price_no": {
+    "type": "float",
+    "description": "Most recent NO price before this trade (0 if none)."
+  },
+  "mid_price": {
+    "type": "float",
+    "description": "If last_price_yes exists: last_price_yes; else current YES-prob price."
+  },
+  "price_deviation": {
+    "type": "float",
+    "description": "curr_yes_price - mid_price."
+  },
+  "signed_price_deviation": {
+    "type": "float",
+    "description": "Same as price_deviation."
+  },
+  "time_since_last_market_trade": {
+    "type": "float",
+    "description": "ts - market.last_ts, or -1 if no history."
+  },
+
+
+  "user_usdc_last_1h_in_market": {
+    "type": "float",
+    "description": "User’s volume in this market over last 1h window."
+  },
+  "user_trades_last_1h_in_market": {
+    "type": "int",
+    "description": "User’s trade count in this market over last 1h."
+  },
+  "user_share_of_volume_1h_in_market": {
+    "type": "float",
+    "description": "user_usdc_last_1h_in_market / market_volume_last_1h."
+  },
+
+
+  "user_total_usdc_in_market": {
+    "type": "float",
+    "description": "Lifetime total USDC spent by user in this market before this trade."
+  },
+  "user_trade_count_in_market": {
+    "type": "int",
+    "description": "Lifetime trades by this user in this market before this trade."
+  },
+  "user_share_of_volume_in_market": {
+    "type": "float",
+    "description": "Lifetime user volume divided by market lifetime volume."
+  },
+  "time_since_user_last_trade_in_market": {
+    "type": "float",
+    "description": "ts - last user trade in this market, -1 if none."
+  }
+}
