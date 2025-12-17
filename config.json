@@ -1,0 +1,7 @@
+{
+  "root": ".",
+  "dataset_root": "data/features_dataset_downsampled",
+  "scaler_path": "data/features_dataset_downsampled/train_scaler.json",
+  "runs_dir": "runs",
+  "checkpoints_dir": "checkpoints"
+}

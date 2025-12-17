@@ -1,6 +1,3 @@
-data/features_dataset/train/
-data/features_dataset/val/
-data/features_dataset/test/
 
 runs/
 checkpoints/
@@ -9,6 +6,7 @@ outputs/
 __pycache__/
 .ipynb_checkpoints/
 
-data/sql/*.db
+.vscode/
+data/*
 
 *.egg-info

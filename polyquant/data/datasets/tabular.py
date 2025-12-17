@@ -11,7 +11,17 @@ import torch
 from torch.utils.data import IterableDataset, get_worker_info
 
 from polyquant.data.normalize import FeatureScaler
+from polyquant.config import load_paths
+from torch.utils.data import DataLoader
 
+BATCH_SIZE = 16384
+NUM_WORKERS = 4
+
+PATHS = load_paths(__file__)
+DATASET_ROOT = PATHS.dataset_root
+SCALER_PATH = PATHS.scaler_path
+RUNS_DIR = PATHS.runs_dir
+CKPT_ROOT = PATHS.checkpoints_dir
 
 @dataclass(frozen=True)
 class TabularBatch:
@@ -20,7 +30,6 @@ class TabularBatch:
     price: torch.Tensor   # [B] float32
     edge: torch.Tensor    # [B] float32
     log_usdc_size: torch.Tensor  # [B] float32
-
 
 class TabularParquetIterable(IterableDataset):
     def __init__(
@@ -211,3 +220,39 @@ class TabularParquetIterable(IterableDataset):
         # end of all files: flush everything
         for batch in maybe_flush_buffer(final=True):
             yield batch
+
+def make_loaders(schema, scaler):
+    train_ds = TabularParquetIterable(
+        split_dir=DATASET_ROOT / "train",
+        feature_cols=schema.feature_cols,
+        scaler=scaler,
+        batch_size=BATCH_SIZE,
+        shuffle_files=True,
+        shuffle_rowgroup=True,
+        seed=123,
+        shuffle_buffer=500_000,
+    )
+    val_ds = TabularParquetIterable(
+        split_dir=DATASET_ROOT / "val",
+        feature_cols=schema.feature_cols,
+        scaler=scaler,
+        batch_size=BATCH_SIZE,
+        shuffle_files=True,
+        shuffle_rowgroup=True,
+        seed=456,
+        shuffle_buffer=200_000,
+    )
+
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=None,
+        num_workers=NUM_WORKERS,
+        pin_memory=True,
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=None,
+        num_workers=NUM_WORKERS,
+        pin_memory=True,
+    )
+    return train_loader, val_loader

@@ -55,7 +55,7 @@ class RunningMoments:
 
 
 def main():
-    dataset_root = Path(r"data\features_dataset")
+    dataset_root = Path(r"data\features_dataset_downsampled")
     out_path = dataset_root / "train_scaler.json"
 
     schema = load_schema(dataset_root)

@@ -4,5 +4,4 @@ pyarrow
 tqdm
 pyyaml
 polars
-torch
 matplotlib

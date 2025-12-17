@@ -6,26 +6,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
+from polyquant.config import load_paths
 from polyquant.data.schema import load_schema
 from polyquant.data.normalize import load_feature_scaler
-from polyquant.data.datasets.tabular import TabularParquetIterable
+from polyquant.data.datasets.tabular import make_loaders
+from polyquant.utils import load_checkpoint, save_checkpoint
 from polyquant.models.mlp import MLP
+from polyquant.losses.weighted_bce import PnLWeightedBCEWithLogits
 
 
 # ===========================
 # HYPERPARAMETERS / PATHS
 # ===========================
 
-ROOT = Path(__file__).resolve().parents[1]
-DATASET_ROOT = ROOT / "data" / "features_dataset"
-SCALER_PATH = DATASET_ROOT / "train_scaler.json"
-
-RUNS_REL = Path("runs")
-CHECKPOINTS_REL = Path("checkpoints")
+PATHS = load_paths(__file__)
+DATASET_ROOT = PATHS.dataset_root
+SCALER_PATH = PATHS.scaler_path
+RUNS_DIR = PATHS.runs_dir
+CKPT_ROOT = PATHS.checkpoints_dir
 
 BATCH_SIZE = 16384
 NUM_WORKERS = 4
@@ -48,128 +48,52 @@ AMP_ENABLED = True
 
 
 # ===========================
-# CHECKPOINT HELPERS
-# ===========================
-
-def save_checkpoint(
-    ckpt_dir: Path,
-    run_name: str,
-    step: int,
-    epoch: int,
-    model: nn.Module,
-    optimizer: torch.optim.Optimizer,
-    scheduler,
-    scaler,
-) -> Path:
-    ckpt_dir.mkdir(parents=True, exist_ok=True)
-    ckpt_path = ckpt_dir / f"step_{step:07d}.pt"
-
-    payload = {
-        "run_name": run_name,
-        "step": step,
-        "epoch": epoch,
-        "model": model.state_dict(),
-        "optimizer": optimizer.state_dict(),
-        "scheduler": scheduler.state_dict() if scheduler is not None else None,
-        "scaler": scaler.state_dict() if scaler is not None else None,
-    }
-    torch.save(payload, ckpt_path)
-    print(f"[CKPT] Saved checkpoint: {ckpt_path}")
-    return ckpt_path
-
-
-def load_checkpoint(
-    ckpt_path: Path,
-    model: nn.Module,
-    optimizer: torch.optim.Optimizer,
-    scheduler,
-    scaler,
-    device: torch.device,
-):
-    ckpt = torch.load(ckpt_path, map_location=device)
-
-    model.load_state_dict(ckpt["model"])
-
-    if "optimizer" in ckpt and ckpt["optimizer"] is not None:
-        optimizer.load_state_dict(ckpt["optimizer"])
-    if "scheduler" in ckpt and ckpt["scheduler"] is not None and scheduler is not None:
-        scheduler.load_state_dict(ckpt["scheduler"])
-    if "scaler" in ckpt and ckpt["scaler"] is not None and scaler is not None:
-        scaler.load_state_dict(ckpt["scaler"])
-
-    step = ckpt.get("step", 0)
-    epoch = ckpt.get("epoch", 0)
-    run_name = ckpt.get("run_name", ckpt_path.parent.name)
-
-    print(f"[CKPT] Loaded checkpoint from {ckpt_path} (step={step}, epoch={epoch}, run={run_name})")
-    return run_name, step, epoch
-
-
-# ===========================
-# DATA HELPERS
-# ===========================
-
-def make_loaders(schema, scaler):
-    train_ds = TabularParquetIterable(
-        split_dir=DATASET_ROOT / "train",
-        feature_cols=schema.feature_cols,
-        scaler=scaler,
-        batch_size=BATCH_SIZE,
-        shuffle_files=True,
-        shuffle_rowgroup=True,
-        seed=123,
-        shuffle_buffer=500_000,
-    )
-    val_ds = TabularParquetIterable(
-        split_dir=DATASET_ROOT / "val",
-        feature_cols=schema.feature_cols,
-        scaler=scaler,
-        batch_size=BATCH_SIZE,
-        shuffle_files=True,
-        shuffle_rowgroup=True,
-        seed=456,
-        shuffle_buffer=200_000,
-    )
-
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=None,
-        num_workers=NUM_WORKERS,
-        pin_memory=True,
-    )
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=None,
-        num_workers=NUM_WORKERS,
-        pin_memory=True,
-    )
-    return train_loader, val_loader
-
-
-# ===========================
 # EVAL
 # ===========================
 
 @torch.no_grad()
 def evaluate(model, loader, device, max_batches: int):
-    model.eval()
-    loss_fn = nn.BCEWithLogitsLoss(reduction="mean")
+    """
+    Evaluation on a (possibly truncated) stream of batches.
 
+    Returns:
+      - bce: PnL-weighted BCE (your training loss)
+      - misclass: 0/1 error rate at threshold 0.5
+      - mae_edge: mean absolute error of (sigmoid(logit) - price) vs true edge
+      - plus profitability metrics for several thresholds tau on predicted edge:
+          take if (q - price) > tau
+        reported as pnl/cost/roi/take_rate/hit_rate.
+    """
+    model.eval()
+    loss_fn = PnLWeightedBCEWithLogits(min_weight=1e-3)
+
+    # core metrics accumulators
     total_loss = 0.0
     total_mis = 0.0
     total_mae_edge = 0.0
     total_n = 0
 
+    # policy thresholds
+    taus = [0.00, 0.005, 0.01, 0.02, 0.05]
+
+    pnl_sum = {t: 0.0 for t in taus}
+    cost_sum = {t: 0.0 for t in taus}
+    take_sum = {t: 0 for t in taus}
+    win_sum = {t: 0 for t in taus}     # count of y==1 among taken
+    tot_sum = 0                        # total examples seen (for take_rate)
+
     batches = 0
 
     for batch in loader:
         x = batch["x"].to(device, non_blocking=True)
-        y = batch["y"].to(device, non_blocking=True)
-        price = batch["price"].to(device, non_blocking=True)
+        y = batch["y"].to(device, non_blocking=True)          # 0/1
+        price = batch["price"].to(device, non_blocking=True)  # p in [0,1]
         edge = batch["edge"].to(device, non_blocking=True)
 
-        logits = model(x)
-        loss = loss_fn(logits, y)
+        logits = model(x).view(-1)
+
+        # loss (scalar)
+        loss = loss_fn(logits, y, price)
 
         probs = torch.sigmoid(logits)
         preds = (probs > 0.5).to(y.dtype)
@@ -183,19 +107,57 @@ def evaluate(model, loader, device, max_batches: int):
         total_mis += float(mis) * n
         total_mae_edge += float(mae_edge) * n
         total_n += n
+        tot_sum += n
+
+        # profitability metrics (policy: take if q - p > tau; buy 1 share)
+        realized = (y - price)   # profit per share
+
+        for t in taus:
+            take = pred_edge > t
+            if take.any():
+                pnl_sum[t] += float(realized[take].sum())
+                take_cnt = int(take.sum().item())
+                take_sum[t] += take_cnt
+                win_sum[t] += int((y[take] > 0.5).sum().item())
 
         batches += 1
         if batches >= max_batches:
             break
 
     if total_n == 0:
-        return {"bce": math.nan, "misclass": math.nan, "mae_edge": math.nan}
+        out = {"bce": math.nan, "misclass": math.nan, "mae_edge": math.nan}
+        for t in taus:
+            key = f"tau_{t:.3f}".replace(".", "p")
+            out[f"pnl/{key}"] = math.nan
+            out[f"pnl_norm/{key}"] = math.nan
+            out[f"take_rate/{key}"] = math.nan
+            out[f"hit_rate/{key}"] = math.nan
+            out[f"n_take/{key}"] = 0
+        return out
 
-    return {
+    out = {
         "bce": total_loss / total_n,
         "misclass": total_mis / total_n,
         "mae_edge": total_mae_edge / total_n,
     }
+
+    for t in taus:
+        key = f"tau_{t:.3f}".replace(".", "p")  # e.g., tau_0p010
+        pnl = pnl_sum[t]
+        cost = cost_sum[t]
+        n_take = take_sum[t]
+
+        pnl_norm = (pnl / n_take) if n_take > 0 else math.nan
+        take_rate = (n_take / tot_sum) if tot_sum > 0 else math.nan
+        hit_rate = (win_sum[t] / n_take) if n_take > 0 else math.nan
+
+        out[f"pnl/{key}"] = pnl
+        out[f"pnl_norm/{key}"] = pnl_norm
+        out[f"take_rate/{key}"] = take_rate
+        out[f"hit_rate/{key}"] = hit_rate
+        out[f"n_take/{key}"] = n_take
+
+    return out
 
 
 # ===========================
@@ -219,9 +181,9 @@ def main():
     print(f"[INFO] Using device: {device}")
 
     schema = load_schema(DATASET_ROOT)
-    scaler = load_feature_scaler(SCALER_PATH, schema.feature_cols, schema.no_scale_cols)
+    feature_scaler = load_feature_scaler(SCALER_PATH, schema.feature_cols, schema.no_scale_cols)
 
-    train_loader, val_loader = make_loaders(schema, scaler)
+    train_loader, val_loader = make_loaders(schema, feature_scaler)
 
     model = MLP(
         in_dim=len(schema.feature_cols),
@@ -242,8 +204,6 @@ def main():
     scaler = torch.amp.GradScaler('cuda', enabled=AMP_ENABLED)
 
     # run / checkpoint dirs
-    RUNS_DIR = ROOT / RUNS_REL
-    CKPT_ROOT = ROOT / CHECKPOINTS_REL
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     CKPT_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -265,7 +225,7 @@ def main():
     writer = SummaryWriter(log_dir=str(RUNS_DIR / run_name))
     writer.add_text("run_info", f"run_name={run_name}, resumed_from={args.resume or 'fresh'}")
 
-    loss_fn = nn.BCEWithLogitsLoss(reduction="mean")
+    loss_fn = PnLWeightedBCEWithLogits(min_weight=1e-3)
 
     model.train()
     t0 = time.time()
@@ -286,9 +246,11 @@ def main():
 
             optimizer.zero_grad(set_to_none=True)
 
+            price = batch["price"].to(device, non_blocking=True)
+
             with torch.amp.autocast("cuda", enabled=AMP_ENABLED):
                 logits = model(x)
-                loss = loss_fn(logits, y)
+                loss = loss_fn(logits, y, price)
 
             scaler.scale(loss).backward()
 
@@ -335,15 +297,13 @@ def main():
             # VALIDATION (separate from checkpointing)
             if global_step % VAL_EVERY_STEPS == 0:
                 val_metrics = evaluate(model, val_loader, device, VAL_MAX_BATCHES)
-                writer.add_scalar("val/bce", val_metrics["bce"], global_step)
-                writer.add_scalar("val/misclass", val_metrics["misclass"], global_step)
-                writer.add_scalar("val/mae_edge", val_metrics["mae_edge"], global_step)
-                print(
-                    f"[VAL step {global_step}] "
-                    f"bce={val_metrics['bce']:.4f} "
-                    f"mis={val_metrics['misclass']:.3f} "
-                    f"mae_edge={val_metrics['mae_edge']:.4f}"
-                )
+
+                for k, v in val_metrics.items():
+                    if v is None:
+                        continue
+                    if isinstance(v, float) and (not math.isnan(v)):
+                        writer.add_scalar(f"val/{k}", v, global_step)
+
                 model.train()
 
             # CHECKPOINT (strictly every CHECKPOINT_EVERY_STEPS)
