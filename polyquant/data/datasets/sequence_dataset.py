@@ -64,6 +64,8 @@ class MarketWindowDataset(torch.utils.data.Dataset):
         # Load index (one row per market)
         idx = pq.read_table(index_path).to_pandas()
         idx = idx[idx["split"] == split].copy()
+        idx = idx[idx["length"] >= 10].copy()
+
         if len(idx) == 0:
             raise ValueError(f"No markets found for split={split} in {index_path}")
 
