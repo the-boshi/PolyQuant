@@ -1,21 +1,23 @@
 #!/usr/bin/env python
 import argparse
 import math
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Add project root to path so polyquant can be imported
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import torch
 from torch.utils.tensorboard import SummaryWriter
-
 from polyquant.config import load_paths
 from polyquant.data.schema import load_schema
 from polyquant.data.normalize import load_feature_scaler
 from polyquant.data.datasets.tabular import make_loaders
 from polyquant.utils import load_checkpoint, save_checkpoint
-from polyquant.models.mlp import MLP
+from polyquant.models.resnet import ResNet1D, ResNetMLP
 from polyquant.losses.weighted_bce import PnLWeightedBCEWithLogits
-
 
 # ===========================
 # HYPERPARAMETERS / PATHS
@@ -27,24 +29,25 @@ SCALER_PATH = PATHS.scaler_path
 RUNS_DIR = PATHS.runs_dir
 CKPT_ROOT = PATHS.checkpoints_dir
 
-BATCH_SIZE = 16384
-NUM_WORKERS = 4
+BATCH_SIZE = 512  # Reduced from 4096 for GPU memory
+NUM_WORKERS = 12
 
-MAX_STEPS = 50_000
-LOG_EVERY_STEPS = 1
-VAL_EVERY_STEPS = 5
+MAX_STEPS = 1_000_000
+WARMUP_STEPS = 2000  # Longer warmup for stability
+LOG_EVERY_STEPS = 100
+VAL_EVERY_STEPS = 500
 VAL_MAX_BATCHES = 100
-CHECKPOINT_EVERY_STEPS = 1_000
+CHECKPOINT_EVERY_STEPS = 10_000
 
-LR = 3e-4
-LR_MIN = 1e-5
-WEIGHT_DECAY = 1e-2
+LR = 3e-5  # Reduced from 1e-4 for stability
+LR_MIN = 1e-6
+WEIGHT_DECAY = 1e-2  # Increased from 1e-3 for regularization
 
-HIDDEN_DIMS = [512, 512, 256, 128]
-DROPOUT = 0.05
+HIDDEN_DIMS = (256, 256, 512, 1024, 512, 512, 1024, 2048, 4096, 1024, 512, 256, 128, 32)  # ResNetMLP hidden layer sizes
+DROPOUT = 0.15  # Slightly increased for regularization
 
-GRAD_CLIP_NORM = 1.0
-AMP_ENABLED = True
+GRAD_CLIP_NORM = 0.5  # Tighter gradient clipping
+AMP_ENABLED = False
 
 
 # ===========================
@@ -180,28 +183,49 @@ def main():
     device = torch.device("cuda")
     print(f"[INFO] Using device: {device}")
 
+    print("[DEBUG] Loading schema...")
     schema = load_schema(DATASET_ROOT)
+    print("[DEBUG] Schema loaded")
+
+    print("[DEBUG] Loading feature scaler...")
     feature_scaler = load_feature_scaler(SCALER_PATH, schema.feature_cols, schema.no_scale_cols)
+    print("[DEBUG] Feature scaler loaded")
 
+    print("[DEBUG] Creating data loaders...")
     train_loader, val_loader = make_loaders(schema, feature_scaler)
+    print("[DEBUG] Data loaders created")
 
-    model = MLP(
+    print("[DEBUG] Creating model...")
+    model = ResNetMLP(
         in_dim=len(schema.feature_cols),
         hidden=HIDDEN_DIMS,
         dropout=DROPOUT,
     ).to(device)
 
+    print("[DEBUG] Model created")
+
+    print("[DEBUG] Creating optimizer...")
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=LR,
         weight_decay=WEIGHT_DECAY,
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=MAX_STEPS,
-        eta_min=LR_MIN,
-    )
+    print("[DEBUG] Optimizer created")
+
+    # Warmup + Cosine Annealing scheduler
+    def lr_lambda(step):
+        if step < WARMUP_STEPS:
+            # Linear warmup from 0 to LR
+            return step / WARMUP_STEPS
+        else:
+            # Cosine annealing from LR to LR_MIN
+            progress = (step - WARMUP_STEPS) / (MAX_STEPS - WARMUP_STEPS)
+            return LR_MIN / LR + (1 - LR_MIN / LR) * 0.5 * (1 + math.cos(math.pi * progress))
+
+    print("[DEBUG] Creating scheduler and scaler...")
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     scaler = torch.amp.GradScaler('cuda', enabled=AMP_ENABLED)
+    print("[DEBUG] Scheduler and scaler created")
 
     # run / checkpoint dirs
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
@@ -209,11 +233,13 @@ def main():
 
     # resume or new run
     if args.resume:
+        print(f"[DEBUG] Resuming from checkpoint: {args.resume}")
         ckpt_path = Path(args.resume).resolve()
         ckpt_dir = ckpt_path.parent
         run_name, global_step, epoch = load_checkpoint(
             ckpt_path, model, optimizer, scheduler, scaler, device
         )
+        print(f"[DEBUG] Checkpoint loaded: step={global_step}, epoch={epoch}")
     else:
         run_name = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         global_step = 0
@@ -222,9 +248,12 @@ def main():
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         print(f"[INFO] Starting new run: {run_name}")
 
+    print("[DEBUG] Creating TensorBoard writer...")
     writer = SummaryWriter(log_dir=str(RUNS_DIR / run_name))
     writer.add_text("run_info", f"run_name={run_name}, resumed_from={args.resume or 'fresh'}")
+    print("[DEBUG] TensorBoard writer created")
 
+    print("[DEBUG] Starting training loop...")
     loss_fn = PnLWeightedBCEWithLogits(min_weight=1e-3)
 
     model.train()
@@ -279,9 +308,9 @@ def main():
                     pred_edge = probs - price
                     mae_edge = torch.abs(pred_edge - edge).mean()
 
-                writer.add_scalar("train/bce", float(loss), global_step)
-                writer.add_scalar("train/misclass", float(mis), global_step)
-                writer.add_scalar("train/mae_edge", float(mae_edge), global_step)
+                writer.add_scalar("train/bce", loss.detach().item(), global_step)
+                writer.add_scalar("train/misclass", mis.detach().item(), global_step)
+                writer.add_scalar("train/mae_edge", mae_edge.detach().item(), global_step)
                 writer.add_scalar("train/lr", lr, global_step)
                 writer.add_scalar("train/steps_per_sec", steps_per_sec, global_step)
 
