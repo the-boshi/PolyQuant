@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import random
 from collections import OrderedDict
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -17,6 +19,45 @@ class MarketRow:
     start: int
     length: int
     y: int
+
+
+def _resolve_shard_path(index_path: str, shard_path: str) -> str:
+    """
+    Resolve shard path relative to the index.parquet location.
+
+    If shard_path is absolute, return it as-is.
+    If shard_path is relative (e.g., 'data/sequences/train/shard_0000.parquet'),
+    resolve it relative to the project root (parent of index file's 'data' folder).
+    """
+    shard_p = Path(shard_path)
+
+    # If absolute path exists, use it directly
+    if shard_p.is_absolute() and shard_p.exists():
+        return str(shard_p)
+
+    # Get the directory containing index.parquet
+    index_dir = Path(index_path).resolve().parent
+
+    # The shard path is relative to the PolyQuant root.
+    # index.parquet is at: <root>/data/sequences/sequences/index.parquet
+    # We need to find the project root.
+
+    # First, try resolving relative to index directory
+    candidate = index_dir / shard_path
+    if candidate.exists():
+        return str(candidate)
+
+    # Navigate up to find the project root (look for 'data' folder)
+    current = index_dir
+    for _ in range(5):  # Max 5 levels up
+        project_root = current
+        candidate = project_root / shard_path
+        if candidate.exists():
+            return str(candidate)
+        current = current.parent
+
+    # Fallback: return original path (will likely fail, but preserves old behavior)
+    return shard_path
 
 
 class _ParquetFileLRU:
@@ -69,8 +110,14 @@ class MarketWindowDataset(torch.utils.data.Dataset):
         if len(idx) == 0:
             raise ValueError(f"No markets found for split={split} in {index_path}")
 
+        # Resolve relative paths to absolute paths based on index location
         self.rows: List[MarketRow] = [
-            MarketRow(path=str(r.path), start=int(r.start), length=int(r.length), y=int(r.y))
+            MarketRow(
+                path=_resolve_shard_path(index_path, str(r.path)),
+                start=int(r.start),
+                length=int(r.length),
+                y=int(r.y),
+            )
             for r in idx.itertuples(index=False)
         ]
 
