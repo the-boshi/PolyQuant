@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import torch
-from torch.utils.tensorboard import SummaryWriter
+import wandb
 from polyquant.config import load_paths
 from polyquant.data.schema import load_schema
 from polyquant.data.normalize import load_feature_scaler
@@ -241,17 +241,35 @@ def main():
         )
         print(f"[DEBUG] Checkpoint loaded: step={global_step}, epoch={epoch}")
     else:
-        run_name = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        run_name = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_resnet"
         global_step = 0
         epoch = 0
         ckpt_dir = CKPT_ROOT / run_name
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         print(f"[INFO] Starting new run: {run_name}")
 
-    print("[DEBUG] Creating TensorBoard writer...")
-    writer = SummaryWriter(log_dir=str(RUNS_DIR / run_name))
-    writer.add_text("run_info", f"run_name={run_name}, resumed_from={args.resume or 'fresh'}")
-    print("[DEBUG] TensorBoard writer created")
+    print("[DEBUG] Initializing Weights & Biases...")
+    wandb.init(
+        project="polyquant",
+        name=run_name,
+        dir=str(RUNS_DIR),
+        config={
+            "model": "ResNetMLP",
+            "batch_size": BATCH_SIZE,
+            "max_steps": MAX_STEPS,
+            "warmup_steps": WARMUP_STEPS,
+            "lr": LR,
+            "lr_min": LR_MIN,
+            "weight_decay": WEIGHT_DECAY,
+            "hidden_dims": HIDDEN_DIMS,
+            "dropout": DROPOUT,
+            "grad_clip_norm": GRAD_CLIP_NORM,
+            "amp_enabled": AMP_ENABLED,
+            "resumed_from": args.resume or "fresh",
+        },
+        resume="allow" if args.resume else None,
+    )
+    print("[DEBUG] Weights & Biases initialized")
 
     print("[DEBUG] Starting training loop...")
     loss_fn = PnLWeightedBCEWithLogits(min_weight=1e-3)
@@ -308,11 +326,13 @@ def main():
                     pred_edge = probs - price
                     mae_edge = torch.abs(pred_edge - edge).mean()
 
-                writer.add_scalar("train/bce", loss.detach().item(), global_step)
-                writer.add_scalar("train/misclass", mis.detach().item(), global_step)
-                writer.add_scalar("train/mae_edge", mae_edge.detach().item(), global_step)
-                writer.add_scalar("train/lr", lr, global_step)
-                writer.add_scalar("train/steps_per_sec", steps_per_sec, global_step)
+                wandb.log({
+                    "train/bce": loss.detach().item(),
+                    "train/misclass": mis.detach().item(),
+                    "train/mae_edge": mae_edge.detach().item(),
+                    "train/lr": lr,
+                    "train/steps_per_sec": steps_per_sec,
+                }, step=global_step)
 
                 now = time.time()
                 dt = now - last_log_time
@@ -327,11 +347,13 @@ def main():
             if global_step % VAL_EVERY_STEPS == 0:
                 val_metrics = evaluate(model, val_loader, device, VAL_MAX_BATCHES)
 
-                for k, v in val_metrics.items():
-                    if v is None:
-                        continue
-                    if isinstance(v, float) and (not math.isnan(v)):
-                        writer.add_scalar(f"val/{k}", v, global_step)
+                val_log = {
+                    f"val/{k}": v
+                    for k, v in val_metrics.items()
+                    if v is not None and isinstance(v, float) and not math.isnan(v)
+                }
+                if val_log:
+                    wandb.log(val_log, step=global_step)
 
                 model.train()
 
@@ -361,7 +383,7 @@ def main():
         scheduler=scheduler,
         scaler=scaler,
     )
-    writer.close()
+    wandb.finish()
     print(f"[DONE] Finished at step {global_step}, epoch {epoch}")
 
 
