@@ -224,9 +224,11 @@ def main():
 
     wandb.init(
         project="polyquant",
+        id=run_name,  # Use run_name as unique ID so resume works
         name=run_name,
         dir=str(RUNS_DIR),
         config={
+            "model": "MLP",
             "batch_size": BATCH_SIZE,
             "max_steps": MAX_STEPS,
             "lr": LR,
@@ -238,7 +240,7 @@ def main():
             "amp_enabled": AMP_ENABLED,
             "resumed_from": args.resume or "fresh",
         },
-        resume="allow" if args.resume else None,
+        resume="must" if args.resume else "never",  # Force resume or force new
     )
 
     loss_fn = PnLWeightedBCEWithLogits(min_weight=1e-3)

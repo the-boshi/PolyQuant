@@ -33,7 +33,7 @@ BATCH_SIZE = 512  # Reduced from 4096 for GPU memory
 NUM_WORKERS = 12
 
 MAX_STEPS = 1_000_000
-WARMUP_STEPS = 2000  # Longer warmup for stability
+WARMUP_STEPS = 5000  # Longer warmup for stability
 LOG_EVERY_STEPS = 100
 VAL_EVERY_STEPS = 500
 VAL_MAX_BATCHES = 100
@@ -251,6 +251,7 @@ def main():
     print("[DEBUG] Initializing Weights & Biases...")
     wandb.init(
         project="polyquant",
+        id=run_name,  # Use run_name as unique ID so resume works
         name=run_name,
         dir=str(RUNS_DIR),
         config={
@@ -267,7 +268,7 @@ def main():
             "amp_enabled": AMP_ENABLED,
             "resumed_from": args.resume or "fresh",
         },
-        resume="allow" if args.resume else None,
+        resume="must" if args.resume else "never",  # Force resume or force new
     )
     print("[DEBUG] Weights & Biases initialized")
 
