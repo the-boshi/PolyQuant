@@ -72,6 +72,7 @@ def evaluate(model, loader, device, max_batches: int, debug: bool = False, debug
 
     # core metrics accumulators
     total_loss = 0.0
+    total_unweighted_bce = 0.0  # standard BCE without PnL weighting
     total_mis = 0.0
     total_mae_edge = 0.0
     total_n = 0
@@ -103,8 +104,12 @@ def evaluate(model, loader, device, max_batches: int, debug: bool = False, debug
 
         logits = model(x).view(-1)
 
-        # loss (scalar)
+        # loss (scalar) - weighted BCE
         loss = loss_fn(logits, y, price)
+        
+        # unweighted BCE (standard)
+        unweighted_bce = torch.nn.functional.binary_cross_entropy_with_logits(logits, y)
+        total_unweighted_bce += float(unweighted_bce) * x.size(0)
 
         # Debug: compute components separately
         if debug:
@@ -233,6 +238,7 @@ def evaluate(model, loader, device, max_batches: int, debug: bool = False, debug
 
     out = {
         "bce": total_loss / total_n,
+        "bce_unweighted": total_unweighted_bce / total_n,
         "misclass": total_mis / total_n,
         "mae_edge": total_mae_edge / total_n,
     }
@@ -439,8 +445,8 @@ def main():
 
             # VALIDATION (separate from checkpointing)
             if global_step % VAL_EVERY_STEPS == 0:
-                # Debug every validation, write to file
-                debug_file = str(RUNS_DIR / run_name / "val_bce_debug.log")
+                # Debug every validation, write to wandb run directory
+                debug_file = str(Path(wandb.run.dir) / "val_bce_debug.log")
                 val_metrics = evaluate(model, val_loader, device, VAL_MAX_BATCHES,
                                        debug=True, debug_file=debug_file, global_step=global_step)
 
