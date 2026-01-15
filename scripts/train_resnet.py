@@ -106,7 +106,7 @@ def evaluate(model, loader, device, max_batches: int, debug: bool = False, debug
 
         # loss (scalar) - weighted BCE
         loss = loss_fn(logits, y, price)
-        
+
         # unweighted BCE (standard)
         unweighted_bce = torch.nn.functional.binary_cross_entropy_with_logits(logits, y)
         total_unweighted_bce += float(unweighted_bce) * x.size(0)
@@ -372,7 +372,8 @@ def main():
     print("[DEBUG] Weights & Biases initialized")
 
     print("[DEBUG] Starting training loop...")
-    loss_fn = PnLWeightedBCEWithLogits(min_weight=1e-3)
+    # Use standard BCE loss (unweighted) for training
+    loss_fn = torch.nn.BCEWithLogitsLoss()
 
     model.train()
     t0 = time.time()
@@ -393,11 +394,9 @@ def main():
 
             optimizer.zero_grad(set_to_none=True)
 
-            price = batch["price"].to(device, non_blocking=True)
-
             with torch.amp.autocast("cuda", enabled=AMP_ENABLED):
                 logits = model(x)
-                loss = loss_fn(logits, y, price)
+                loss = loss_fn(logits.view(-1), y)
 
             scaler.scale(loss).backward()
 
