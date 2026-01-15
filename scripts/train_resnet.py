@@ -55,7 +55,7 @@ AMP_ENABLED = False
 # ===========================
 
 @torch.no_grad()
-def evaluate(model, loader, device, max_batches: int):
+def evaluate(model, loader, device, max_batches: int, debug: bool = False, debug_file: str = None, global_step: int = 0):
     """
     Evaluation on a (possibly truncated) stream of batches.
 
@@ -75,6 +75,14 @@ def evaluate(model, loader, device, max_batches: int):
     total_mis = 0.0
     total_mae_edge = 0.0
     total_n = 0
+
+    # Debug accumulators
+    if debug:
+        all_batch_losses = []
+        all_logit_stats = []
+        all_weight_stats = []
+        all_unweighted_bce = []
+        all_prob_stats = []
 
     # policy thresholds
     taus = [0.00, 0.005, 0.01, 0.02, 0.05]
@@ -97,6 +105,36 @@ def evaluate(model, loader, device, max_batches: int):
 
         # loss (scalar)
         loss = loss_fn(logits, y, price)
+
+        # Debug: compute components separately
+        if debug:
+            bce_per_ex = torch.nn.functional.binary_cross_entropy_with_logits(logits, y, reduction="none")
+            w = y * (1.0 - price) + (1.0 - y) * price
+            w_clamped = torch.clamp(w, min=1e-3)
+
+            all_batch_losses.append(float(loss))
+            all_logit_stats.append({
+                "min": float(logits.min()),
+                "max": float(logits.max()),
+                "mean": float(logits.mean()),
+                "std": float(logits.std()),
+            })
+            all_weight_stats.append({
+                "min": float(w.min()),
+                "max": float(w.max()),
+                "mean": float(w.mean()),
+                "sum": float(w_clamped.sum()),
+            })
+            all_unweighted_bce.append(float(bce_per_ex.mean()))
+
+            # Also track probability stats
+            probs_debug = torch.sigmoid(logits)
+            all_prob_stats.append({
+                "min": float(probs_debug.min()),
+                "max": float(probs_debug.max()),
+                "mean": float(probs_debug.mean()),
+                "std": float(probs_debug.std()),
+            })
 
         probs = torch.sigmoid(logits)
         preds = (probs > 0.5).to(y.dtype)
@@ -126,6 +164,61 @@ def evaluate(model, loader, device, max_batches: int):
         batches += 1
         if batches >= max_batches:
             break
+
+    # Print debug summary
+    if debug and batches > 0:
+        import numpy as np
+        losses = np.array(all_batch_losses)
+        unweighted = np.array(all_unweighted_bce)
+        logit_means = np.array([s["mean"] for s in all_logit_stats])
+        logit_stds = np.array([s["std"] for s in all_logit_stats])
+        logit_mins = np.array([s["min"] for s in all_logit_stats])
+        logit_maxs = np.array([s["max"] for s in all_logit_stats])
+        weight_means = np.array([s["mean"] for s in all_weight_stats])
+        prob_means = np.array([s["mean"] for s in all_prob_stats])
+        prob_mins = np.array([s["min"] for s in all_prob_stats])
+        prob_maxs = np.array([s["max"] for s in all_prob_stats])
+
+        debug_lines = [
+            "",
+            "=" * 60,
+            f"DEBUG: Validation BCE Analysis (step={global_step})",
+            "=" * 60,
+            f"Batches evaluated: {batches}",
+            f"Total samples: {total_n}",
+            "",
+            "Per-batch WEIGHTED BCE (what we log):",
+            f"  min={losses.min():.4f}, max={losses.max():.4f}, mean={losses.mean():.4f}, std={losses.std():.4f}",
+            "",
+            "Per-batch UNWEIGHTED BCE (standard BCE):",
+            f"  min={unweighted.min():.4f}, max={unweighted.max():.4f}, mean={unweighted.mean():.4f}",
+            "",
+            "Logit statistics:",
+            f"  mean of means: {logit_means.mean():.4f}",
+            f"  mean of stds:  {logit_stds.mean():.4f}",
+            f"  global min:    {logit_mins.min():.4f}",
+            f"  global max:    {logit_maxs.max():.4f}",
+            "",
+            "Probability statistics (sigmoid of logits):",
+            f"  mean of means: {prob_means.mean():.4f}",
+            f"  global min:    {prob_mins.min():.4f}",
+            f"  global max:    {prob_maxs.max():.4f}",
+            "",
+            "Weight statistics (w = y*(1-p) + (1-y)*p):",
+            f"  mean of means: {weight_means.mean():.4f}",
+            "",
+            f"Final accumulated BCE: {total_loss / total_n:.4f}",
+            "=" * 60,
+            "",
+        ]
+
+        debug_text = "\n".join(debug_lines)
+        print(debug_text)
+
+        # Write to file
+        if debug_file:
+            with open(debug_file, "a") as f:
+                f.write(debug_text + "\n")
 
     if total_n == 0:
         out = {"bce": math.nan, "misclass": math.nan, "mae_edge": math.nan}
@@ -346,7 +439,10 @@ def main():
 
             # VALIDATION (separate from checkpointing)
             if global_step % VAL_EVERY_STEPS == 0:
-                val_metrics = evaluate(model, val_loader, device, VAL_MAX_BATCHES)
+                # Debug every validation, write to file
+                debug_file = str(RUNS_DIR / run_name / "val_bce_debug.log")
+                val_metrics = evaluate(model, val_loader, device, VAL_MAX_BATCHES,
+                                       debug=True, debug_file=debug_file, global_step=global_step)
 
                 val_log = {
                     f"val/{k}": v
