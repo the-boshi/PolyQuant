@@ -183,6 +183,134 @@ class MarketTransformer(nn.Module):
         )
 
 
+class MarketTransformerNoUser(nn.Module):
+    """
+    Transformer encoder for binary market outcome prediction without user embeddings.
+
+    Args:
+        d_input: Number of continuous input features (default 10)
+        d_model: Model hidden dimension (default 128)
+        n_heads: Number of attention heads (default 4)
+        n_layers: Number of transformer encoder layers (default 4)
+        d_ff: Feed-forward hidden dimension (default 512)
+        max_seq_len: Maximum sequence length (default 512)
+        dropout: Dropout probability (default 0.1)
+    """
+
+    def __init__(
+        self,
+        d_input: int = 10,
+        d_model: int = 128,
+        n_heads: int = 4,
+        n_layers: int = 4,
+        d_ff: int = 512,
+        max_seq_len: int = 512,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+
+        self.d_model = d_model
+        self.max_seq_len = max_seq_len
+
+        # Input projection: continuous features -> d_model
+        self.input_proj = nn.Linear(d_input, d_model)
+
+        # Learned positional embeddings
+        self.pos_embed = nn.Embedding(max_seq_len, d_model)
+
+        # Dropout after embeddings
+        self.embed_dropout = nn.Dropout(dropout)
+
+        # Transformer encoder layers
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=d_ff,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+
+        # Final layer norm
+        self.final_norm = nn.LayerNorm(d_model)
+
+        # Classification head
+        self.classifier = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, 1),
+        )
+
+        self._init_weights()
+
+    def _init_weights(self):
+        """Initialize weights with small values for stable training."""
+        for name, p in self.named_parameters():
+            if "weight" in name and p.dim() >= 2:
+                nn.init.xavier_uniform_(p)
+            elif "bias" in name:
+                nn.init.zeros_(p)
+
+        nn.init.normal_(self.pos_embed.weight, mean=0.0, std=0.02)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Forward pass.
+
+        Args:
+            x: Continuous features, shape (B, L, D)
+            mask: Boolean mask, True for valid tokens, shape (B, L)
+
+        Returns:
+            logits: Shape (B,) - raw logits for binary classification
+        """
+        B, L, _ = x.shape
+        device = x.device
+
+        # Project continuous features
+        h = self.input_proj(x)  # (B, L, d_model)
+
+        # Add positional embeddings
+        positions = torch.arange(L, device=device)  # (L,)
+        pos_embed = self.pos_embed(positions)  # (L, d_model)
+        h = h + pos_embed.unsqueeze(0)  # (B, L, d_model)
+
+        # Dropout
+        h = self.embed_dropout(h)
+
+        # Padding mask: True = ignore
+        src_key_padding_mask = ~mask  # (B, L)
+
+        # Apply transformer encoder
+        h = self.encoder(h, src_key_padding_mask=src_key_padding_mask)  # (B, L, d_model)
+
+        # Final layer norm
+        h = self.final_norm(h)
+
+        # Mean pooling over non-padded tokens
+        mask_expanded = mask.unsqueeze(-1).float()  # (B, L, 1)
+        h_masked = h * mask_expanded
+        h_sum = h_masked.sum(dim=1)  # (B, d_model)
+        mask_sum = mask_expanded.sum(dim=1).clamp(min=1.0)  # (B, 1)
+        h_pooled = h_sum / mask_sum
+
+        # Classification
+        logits = self.classifier(h_pooled).squeeze(-1)  # (B,)
+
+        return logits
+
+    def count_parameters(self) -> int:
+        """Count total trainable parameters."""
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
 class TradeTransformer(nn.Module):
     """
     Transformer for per-trade edge prediction.
@@ -366,6 +494,36 @@ def create_small_transformer(**kwargs) -> MarketTransformer:
     )
     defaults.update(kwargs)
     return MarketTransformer(**defaults)
+
+
+def create_small_transformer_no_user(**kwargs) -> MarketTransformerNoUser:
+    """Create a small transformer without user embeddings."""
+    defaults = dict(
+        d_input=10,
+        d_model=128,
+        n_heads=4,
+        n_layers=4,
+        d_ff=512,
+        max_seq_len=512,
+        dropout=0.1,
+    )
+    defaults.update(kwargs)
+    return MarketTransformerNoUser(**defaults)
+
+
+def create_base_transformer_no_user(**kwargs) -> MarketTransformerNoUser:
+    """Create a base transformer without user embeddings."""
+    defaults = dict(
+        d_input=10,
+        d_model=256,
+        n_heads=8,
+        n_layers=6,
+        d_ff=1024,
+        max_seq_len=512,
+        dropout=0.1,
+    )
+    defaults.update(kwargs)
+    return MarketTransformerNoUser(**defaults)
 
 
 def create_base_transformer(**kwargs) -> MarketTransformer:
