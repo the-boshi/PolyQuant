@@ -17,7 +17,6 @@ from polyquant.data.normalize import load_feature_scaler
 from polyquant.data.datasets.tabular import make_loaders
 from polyquant.utils import load_checkpoint, save_checkpoint
 from polyquant.models.resnet import ResNet1D, ResNetMLP
-from polyquant.losses.weighted_bce import PnLWeightedBCEWithLogits
 from polyquant.metrics import MetricsAccumulator, log_metrics_to_wandb, log_train_metrics_to_wandb
 
 # ===========================
@@ -61,13 +60,13 @@ def evaluate(model, loader, device, max_batches: int):
     Evaluation on a (possibly truncated) stream of batches.
 
     Returns dict with:
-      - bce: PnL-weighted BCE (training loss)
+      - bce: BCE loss
       - misclass: 0/1 error rate at threshold 0.5
       - mae_edge: mean absolute error of predicted vs true edge
-      - profitability metrics for several thresholds tau
+      - profitability metrics
     """
     model.eval()
-    loss_fn = PnLWeightedBCEWithLogits(min_weight=1e-3)
+    loss_fn = torch.nn.BCEWithLogitsLoss()
     metrics = MetricsAccumulator()
 
     batches = 0
@@ -78,7 +77,7 @@ def evaluate(model, loader, device, max_batches: int):
         edge = batch["edge"].to(device, non_blocking=True)
 
         logits = model(x).view(-1)
-        loss = loss_fn(logits, y, price)
+        loss = loss_fn(logits, y)
 
         metrics.update(logits, y, price, loss=float(loss), edge=edge)
 
@@ -199,7 +198,7 @@ def main():
     print("[DEBUG] Weights & Biases initialized")
 
     print("[DEBUG] Starting training loop...")
-    loss_fn = PnLWeightedBCEWithLogits(min_weight=1e-3)
+    loss_fn = torch.nn.BCEWithLogitsLoss()
 
     model.train()
     t0 = time.time()
@@ -224,7 +223,7 @@ def main():
 
             with torch.amp.autocast("cuda", enabled=AMP_ENABLED):
                 logits = model(x)
-                loss = loss_fn(logits, y, price)
+                loss = loss_fn(logits.view(-1), y)
 
             scaler.scale(loss).backward()
 

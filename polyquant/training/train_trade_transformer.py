@@ -22,7 +22,6 @@ from torch.utils.tensorboard import SummaryWriter
 from polyquant.config import load_paths
 from polyquant.data.datasets.sequence_dataset import MarketWindowDataset
 from polyquant.models.transformer import create_small_trade_transformer, create_base_trade_transformer
-from polyquant.losses.weighted_bce import PnLWeightedBCEWithLogits
 from polyquant.utils import load_checkpoint, save_checkpoint
 
 
@@ -136,30 +135,24 @@ def set_lr(optimizer: torch.optim.Optimizer, lr: float):
 # LOSS FUNCTIONS
 # ===========================
 
-class SequencePnLWeightedBCE:
-    """PnL-weighted BCE for sequences with masking and min context."""
+class SequenceBCE:
+    """BCE for sequences with masking and min context."""
 
-    def __init__(self, min_weight: float = 1e-3, min_context: int = 0):
-        self.min_weight = min_weight
+    def __init__(self, min_context: int = 0):
         self.min_context = min_context
 
     def __call__(
         self,
         logits: torch.Tensor,  # (B, L)
         y: torch.Tensor,       # (B,) market outcome
-        price: torch.Tensor,   # (B, L) p_yes per trade
         mask: torch.Tensor,    # (B, L) valid tokens
     ) -> torch.Tensor:
-        """Compute masked PnL-weighted BCE loss, skipping first min_context tokens."""
+        """Compute masked BCE loss, skipping first min_context tokens."""
         B, L = logits.shape
         device = logits.device
 
         # Expand y to (B, L) - same outcome for all trades in a market
         y_expanded = y.float().unsqueeze(1).expand(B, L)
-
-        # PnL weight: w = y*(1-p) + (1-y)*p
-        w = y_expanded * (1.0 - price) + (1.0 - y_expanded) * price
-        w = torch.clamp(w, min=self.min_weight)
 
         # BCE per token
         bce = F.binary_cross_entropy_with_logits(logits, y_expanded, reduction="none")
@@ -168,12 +161,9 @@ class SequencePnLWeightedBCE:
         context_mask = torch.arange(L, device=device) >= self.min_context  # (L,)
         effective_mask = mask & context_mask.unsqueeze(0)  # (B, L)
 
-        # Apply mask
-        w_masked = w * effective_mask.float()
+        # Apply mask and compute mean
         bce_masked = bce * effective_mask.float()
-
-        # Weighted mean
-        return (bce_masked * w_masked).sum() / (w_masked.sum() + 1e-8)
+        return bce_masked.sum() / (effective_mask.float().sum() + 1e-8)
 
 
 # ===========================
@@ -196,7 +186,7 @@ def evaluate(model, loader, device, max_batches: int, min_context: int = 0) -> d
         dict with bce, misclass, mae_edge, and per-threshold pnl/take_rate/hit_rate
     """
     model.eval()
-    loss_fn = SequencePnLWeightedBCE(min_weight=1e-3, min_context=min_context)
+    loss_fn = SequenceBCE(min_context=min_context)
 
     # Core metrics accumulators
     total_loss = 0.0
@@ -221,7 +211,7 @@ def evaluate(model, loader, device, max_batches: int, min_context: int = 0) -> d
         price = x[:, :, 0]  # (B, L)
 
         logits = model(x, u, mask)  # (B, L)
-        loss = loss_fn(logits, y, price, mask)
+        loss = loss_fn(logits, y, mask)
 
         probs = torch.sigmoid(logits)  # (B, L)
 
@@ -364,7 +354,7 @@ def main():
     scaler = torch.amp.GradScaler("cuda", enabled=AMP_ENABLED)
 
     # Loss function (skip first MIN_CONTEXT tokens)
-    loss_fn = SequencePnLWeightedBCE(min_weight=1e-3, min_context=MIN_CONTEXT)
+    loss_fn = SequenceBCE(min_context=MIN_CONTEXT)
 
     # Directories
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
@@ -425,7 +415,7 @@ def main():
 
             with torch.amp.autocast("cuda", enabled=AMP_ENABLED):
                 logits = model(x, u, mask)  # (B, L)
-                loss = loss_fn(logits, y, price, mask)
+                loss = loss_fn(logits, y, mask)
 
             scaler.scale(loss).backward()
 
