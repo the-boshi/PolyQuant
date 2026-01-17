@@ -1,7 +1,6 @@
 """Metrics module for PolyQuant training."""
 
 from polyquant.metrics.evaluation import (
-    DEFAULT_TAUS,
     MetricsAccumulator,
     compute_batch_metrics,
     log_metrics_to_wandb,
@@ -11,7 +10,6 @@ from polyquant.metrics.evaluation import (
 from polyquant.metrics.profit import profit_metrics_threshold
 
 __all__ = [
-    "DEFAULT_TAUS",
     "MetricsAccumulator",
     "compute_batch_metrics",
     "log_metrics_to_wandb",

@@ -6,3 +6,4 @@ pyyaml
 polars
 matplotlib
 wandb
+scikit-learn

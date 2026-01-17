@@ -7,14 +7,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Sequence
 
 import torch
 import wandb
-
-
-# Default thresholds for profitability metrics
-DEFAULT_TAUS: tuple[float, ...] = (0.00, 0.005, 0.01, 0.02, 0.05)
 
 
 @dataclass
@@ -28,13 +23,15 @@ class MetricsAccumulator:
             acc.update(logits, y, price)
         metrics = acc.compute()
     """
-    taus: Sequence[float] = field(default_factory=lambda: DEFAULT_TAUS)
 
     # Core metrics
     total_loss: float = 0.0
     total_misclass: float = 0.0
     total_mae_edge: float = 0.0
     total_n: int = 0
+
+    # Baseline metric: misclassification when predicting based on price threshold
+    total_baseline_misclass: float = 0.0
 
     # Track whether price was provided (for edge/profitability metrics)
     _has_price: bool = False
@@ -43,17 +40,10 @@ class MetricsAccumulator:
     all_probs: list = field(default_factory=list)
     all_labels: list = field(default_factory=list)
 
-    # Profitability accumulators (initialized in __post_init__)
-    pnl_sum: dict = field(default_factory=dict)
-    take_sum: dict = field(default_factory=dict)
-    win_sum: dict = field(default_factory=dict)
-
-    def __post_init__(self):
-        # Initialize per-tau accumulators
-        for t in self.taus:
-            self.pnl_sum[t] = 0.0
-            self.take_sum[t] = 0
-            self.win_sum[t] = 0
+    # Profitability accumulators (for tau=0, i.e., take when pred_edge > 0)
+    pnl_sum: float = 0.0
+    take_sum: int = 0
+    win_sum: int = 0
 
     @torch.no_grad()
     def update(
@@ -103,6 +93,11 @@ class MetricsAccumulator:
             price = price.view(-1)
             pred_edge = probs - price
 
+            # Baseline misclassification: predict success if price > 0.5, failure otherwise
+            baseline_preds = (price > 0.5).to(y.dtype)
+            baseline_misclass = (baseline_preds != y).float().mean()
+            self.total_baseline_misclass += float(baseline_misclass) * n
+
             # Edge MAE
             if edge is None:
                 true_edge = y.float() - price
@@ -111,16 +106,13 @@ class MetricsAccumulator:
             mae_edge = torch.abs(pred_edge - true_edge).mean()
             self.total_mae_edge += float(mae_edge) * n
 
-            # Profitability metrics
+            # Profitability metrics (tau=0: take when pred_edge > 0)
             realized = y.float() - price  # profit per unit
-
-            for t in self.taus:
-                take = pred_edge > t
-                if take.any():
-                    self.pnl_sum[t] += float(realized[take].sum())
-                    take_cnt = int(take.sum().item())
-                    self.take_sum[t] += take_cnt
-                    self.win_sum[t] += int((y[take] > 0.5).sum().item())
+            take = pred_edge > 0
+            if take.any():
+                self.pnl_sum += float(realized[take].sum())
+                self.take_sum += int(take.sum().item())
+                self.win_sum += int((y[take] > 0.5).sum().item())
 
     def compute(self, prefix: str = "") -> dict[str, float]:
         """
@@ -139,13 +131,12 @@ class MetricsAccumulator:
             }
             if self._has_price:
                 out[f"{prefix}mae_edge"] = math.nan
-                for t in self.taus:
-                    key = _tau_key(t)
-                    out[f"{prefix}pnl/{key}"] = math.nan
-                    out[f"{prefix}pnl_norm/{key}"] = math.nan
-                    out[f"{prefix}take_rate/{key}"] = math.nan
-                    out[f"{prefix}hit_rate/{key}"] = math.nan
-                    out[f"{prefix}n_take/{key}"] = 0
+                out[f"{prefix}baseline_misclass"] = math.nan
+                out[f"{prefix}pnl"] = math.nan
+                out[f"{prefix}pnl_norm"] = math.nan
+                out[f"{prefix}take_rate"] = math.nan
+                out[f"{prefix}hit_rate"] = math.nan
+                out[f"{prefix}n_take"] = 0
             return out
 
         out = {
@@ -159,22 +150,21 @@ class MetricsAccumulator:
         # Edge and profitability metrics (only if price was provided)
         if self._has_price:
             out[f"{prefix}mae_edge"] = self.total_mae_edge / self.total_n
+            out[f"{prefix}baseline_misclass"] = self.total_baseline_misclass / self.total_n
 
-            # Profitability metrics per tau
-            for t in self.taus:
-                key = _tau_key(t)
-                pnl = self.pnl_sum[t]
-                n_take = self.take_sum[t]
+            # Profitability metrics (tau=0)
+            pnl = self.pnl_sum
+            n_take = self.take_sum
 
-                pnl_norm = (pnl / n_take) if n_take > 0 else math.nan
-                take_rate = (n_take / self.total_n) if self.total_n > 0 else math.nan
-                hit_rate = (self.win_sum[t] / n_take) if n_take > 0 else math.nan
+            pnl_norm = (pnl / n_take) if n_take > 0 else math.nan
+            take_rate = (n_take / self.total_n) if self.total_n > 0 else math.nan
+            hit_rate = (self.win_sum / n_take) if n_take > 0 else math.nan
 
-                out[f"{prefix}pnl/{key}"] = pnl
-                out[f"{prefix}pnl_norm/{key}"] = pnl_norm
-                out[f"{prefix}take_rate/{key}"] = take_rate
-                out[f"{prefix}hit_rate/{key}"] = hit_rate
-                out[f"{prefix}n_take/{key}"] = n_take
+            out[f"{prefix}pnl"] = pnl
+            out[f"{prefix}pnl_norm"] = pnl_norm
+            out[f"{prefix}take_rate"] = take_rate
+            out[f"{prefix}hit_rate"] = hit_rate
+            out[f"{prefix}n_take"] = n_take
 
         # Compute AUC if possible
         if self.all_probs and self.all_labels:
@@ -194,19 +184,14 @@ class MetricsAccumulator:
         self.total_loss = 0.0
         self.total_misclass = 0.0
         self.total_mae_edge = 0.0
+        self.total_baseline_misclass = 0.0
         self.total_n = 0
         self._has_price = False
         self.all_probs = []
         self.all_labels = []
-        for t in self.taus:
-            self.pnl_sum[t] = 0.0
-            self.take_sum[t] = 0
-            self.win_sum[t] = 0
-
-
-def _tau_key(tau: float) -> str:
-    """Convert tau value to a wandb-safe key, e.g., 0.01 -> 'tau_0p010'."""
-    return f"tau_{tau:.3f}".replace(".", "p")
+        self.pnl_sum = 0.0
+        self.take_sum = 0
+        self.win_sum = 0
 
 
 @torch.no_grad()
@@ -214,7 +199,6 @@ def compute_batch_metrics(
     logits: torch.Tensor,
     y: torch.Tensor,
     price: torch.Tensor,
-    taus: Sequence[float] = DEFAULT_TAUS,
 ) -> dict[str, float]:
     """
     Compute metrics for a single batch.
@@ -225,12 +209,11 @@ def compute_batch_metrics(
         logits: Model outputs before sigmoid, shape [B] or [B, 1]
         y: Ground truth labels {0, 1}, shape [B]
         price: Prices in [0, 1], shape [B]
-        taus: Thresholds for profitability metrics
 
     Returns:
         Dictionary of metric names to values
     """
-    acc = MetricsAccumulator(taus=taus)
+    acc = MetricsAccumulator()
     acc.update(logits, y, price, store_for_auc=False)
     return acc.compute()
 

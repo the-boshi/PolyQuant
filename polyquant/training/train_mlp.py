@@ -187,10 +187,10 @@ def main():
 
             x = batch["x"].to(device, non_blocking=True)
             y = batch["y"].to(device, non_blocking=True)
+            price = batch["price"].to(device, non_blocking=True)
+            edge = batch["edge"].to(device, non_blocking=True)
 
             optimizer.zero_grad(set_to_none=True)
-
-            price = batch["price"].to(device, non_blocking=True)
 
             with torch.amp.autocast("cuda", enabled=AMP_ENABLED):
                 logits = model(x)
@@ -211,9 +211,6 @@ def main():
                 elapsed = time.time() - t0
                 steps_per_sec = global_step / max(elapsed, 1e-6)
                 lr = optimizer.param_groups[0]["lr"]
-
-                price = batch["price"].to(device, non_blocking=True)
-                edge = batch["edge"].to(device, non_blocking=True)
 
                 log_train_metrics_to_wandb(
                     loss=float(loss),
