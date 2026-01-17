@@ -26,11 +26,45 @@ This guide walks you through setting up the PolyQuant project on a DigitalOcean 
 
 ## Step 2: Connect to Your Droplet
 
-Once the droplet is running, get the IP address from the console:
+Once the droplet is running, get the IP address from the console.
+
+### Option A: Terminal SSH
 
 ```bash
 ssh root@<YOUR_DROPLET_IP>
 ```
+
+### Option B: VS Code Remote SSH (Recommended)
+
+Connect VS Code directly to the droplet for a full IDE experience:
+
+1. **Install the extension** in VS Code:
+   - Open Extensions (`Ctrl+Shift+X`)
+   - Search for **"Remote - SSH"** by Microsoft
+   - Install it
+
+2. **Connect to the droplet**:
+   - Press `F1` → type **"Remote-SSH: Connect to Host"**
+   - Enter: `root@<YOUR_DROPLET_IP>`
+   - Select **Linux** when prompted
+   - Enter your SSH key passphrase
+
+3. **Open the project folder**:
+   - Once connected, click **"Open Folder"**
+   - Navigate to `/root/polyquant`
+
+**Benefits of VS Code Remote SSH:**
+- Full VS Code experience on the remote machine
+- File explorer with all remote files
+- Integrated terminal (`Ctrl+``) opens SSH terminal directly
+- Extensions (Python, Pylance) run remotely
+- Git integration works with the remote repo
+- Edit code and run training in the same window
+
+**Tips:**
+- Install the Python extension on the remote when prompted
+- Run `watch -n 1 nvidia-smi` in a terminal to monitor GPU
+- Use `tmux` inside the VS Code terminal for persistent sessions
 
 ---
 
