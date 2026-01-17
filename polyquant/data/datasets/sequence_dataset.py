@@ -96,6 +96,8 @@ class MarketWindowDataset(torch.utils.data.Dataset):
         min_prefix: int = 20,
         pf_cache: int = 64,
         include_ts: bool = False,
+        include_price: bool = False,
+        include_outcome_index: bool = False,
     ):
         self.L = int(L)
         self.min_prefix = int(min_prefix)
@@ -122,13 +124,21 @@ class MarketWindowDataset(torch.utils.data.Dataset):
         ]
 
         # Columns stored in shard parquet (from our build script)
-        # market_id,timestamp,p_yes,dp_yes_clip,log_dt,log_usdc_size,user_hash,
+        # market_id,timestamp,p_yes,price,outcome_index,dp_yes_clip,log_dt,log_usdc_size,user_hash,
         # user_recent_pnl_asinh,user_avg_size_log,user_days_active_log,
         # user_hist_pnl_asinh,user_hist_winrate,user_pnl_std_log,y
         self.include_ts = bool(include_ts)
+        self.include_price = bool(include_price)
+        self.include_outcome_index = bool(include_outcome_index)
 
         self.float_cols = [
             "p_yes",
+        ]
+        if self.include_price:
+            self.float_cols.append("price")
+        if self.include_outcome_index:
+            self.float_cols.append("outcome_index")
+        self.float_cols.extend([
             "dp_yes_clip",
             "log_dt",
             "log_usdc_size",
@@ -138,7 +148,7 @@ class MarketWindowDataset(torch.utils.data.Dataset):
             "user_hist_pnl_asinh",
             "user_hist_winrate",
             "user_pnl_std_log",
-        ]
+        ])
         self.int_cols = ["user_hash"]
         self.ts_col = ["timestamp"] if self.include_ts else []
 
