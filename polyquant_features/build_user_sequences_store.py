@@ -11,10 +11,12 @@ import pyarrow.parquet as pq
 # ----------------------------
 # CONFIG
 # ----------------------------
-FEATURE_GLOB = r"C:\Users\nimro\PolyQuant\data\features\features_chunk_*.parquet"
-INDEX_PATH = r"C:\Users\nimro\PolyQuant\data\sequences\index.parquet"
-OUT_DIR = Path(r"C:\Users\nimro\PolyQuant\data\user_sequences_store")
-PROJECT_ROOT = OUT_DIR.parent.parent
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+
+FEATURE_GLOB = str(PROJECT_ROOT / "data" / "features" / "features_chunk_*.parquet")
+INDEX_PATH = str(PROJECT_ROOT / "data" / "sequences" / "index.parquet")
+OUT_DIR = PROJECT_ROOT / "data" / "user_sequences_store"
 
 # Sharding (user_id -> shard)
 NUM_SHARDS = {"train": 256, "val": 64, "test": 64}
@@ -178,7 +180,7 @@ def build_index(out_dir: Path) -> None:
                     else:
                         rows["split"].append(split)
                         rows["user_id"].append(str(prev_uid))
-                        rel_path = Path(shp).resolve().relative_to(PROJECT_ROOT).as_posix()
+                        rel_path = shp.relative_to(PROJECT_ROOT).as_posix()
                         rows["path"].append(rel_path)
                         rows["start"].append(int(run_start_global))
                         rows["length"].append(int(run_len))
@@ -196,7 +198,7 @@ def build_index(out_dir: Path) -> None:
             if prev_uid is not None and run_len > 0:
                 rows["split"].append(split)
                 rows["user_id"].append(str(prev_uid))
-                rel_path = Path(shp).resolve().relative_to(PROJECT_ROOT).as_posix()
+                rel_path = shp.relative_to(PROJECT_ROOT).as_posix()
                 rows["path"].append(rel_path)
                 rows["start"].append(int(run_start_global))
                 rows["length"].append(int(run_len))
