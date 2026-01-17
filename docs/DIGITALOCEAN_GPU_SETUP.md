@@ -118,20 +118,34 @@ pip install -e .
 
 Data files are not stored in git. Transfer them from your local machine.
 
+### Which Folders to Upload?
+
+| Folder | Upload? | Used By |
+|--------|---------|---------|
+| `features_full/` | ✅ **YES** | ResNet training |
+| `sequences/` | ✅ **YES** | Dual encoder (market sequences) |
+| `user_sequences_store/` | ✅ **YES** | Dual encoder (user sequences) |
+| `features/` | ❌ No | Raw data - can regenerate features_full |
+| `features_dataset_downsampled/` | ❌ No | Old version, not used |
+| `user_sequences/` | ❌ No | Intermediate data for building store |
+| `market_meta.parquet` | ❌ No | Already embedded in features_full |
+
 ### On Windows (PowerShell):
 
 ```powershell
 # Navigate to data directory
 cd E:\Roy_Data\Projects\Technion\deep-project\PolyQuant\data
 
-# Compress the features_full directory
+# Compress folders separately (easier to manage)
 tar -cvzf features_full.tar.gz features_full
+tar -cvzf sequences.tar.gz sequences
+tar -cvzf user_sequences_store.tar.gz user_sequences_store
 
-# Transfer to droplet
-scp features_full.tar.gz root@<YOUR_DROPLET_IP>:/root/polyquant/data/
+# Check sizes before upload
+Get-ChildItem *.tar.gz | Select-Object Name, @{Name="SizeGB";Expression={[math]::Round($_.Length/1GB, 2)}}
 
-# Transfer market_meta if needed
-scp market_meta.parquet root@<YOUR_DROPLET_IP>:/root/polyquant/data/
+# Transfer all to droplet
+scp features_full.tar.gz sequences.tar.gz user_sequences_store.tar.gz root@<YOUR_DROPLET_IP>:/root/polyquant/data/
 ```
 
 ### On the Droplet:
@@ -139,14 +153,18 @@ scp market_meta.parquet root@<YOUR_DROPLET_IP>:/root/polyquant/data/
 ```bash
 cd /root/polyquant/data
 
-# Extract the data
+# Extract all archives
 tar -xvzf features_full.tar.gz
+tar -xvzf sequences.tar.gz
+tar -xvzf user_sequences_store.tar.gz
 
-# Remove the archive to save space
-rm features_full.tar.gz
+# Remove archives to save space
+rm *.tar.gz
 
 # Verify the data
 ls -la features_full/train/ | head
+ls -la sequences/
+ls -la user_sequences_store/
 ```
 
 ---
@@ -250,9 +268,97 @@ scp -r root@<YOUR_DROPLET_IP>:/root/polyquant/checkpoints/<run_name> E:\Roy_Data
 
 ## Cost Management
 
-- **Stop the droplet** when not in use to avoid charges
-- GPU droplets are billed per hour, even when idle
-- Consider using **Snapshots** to save the configured state before destroying
+GPU droplets are billed **per hour from the moment they are created**, even when idle or powered off. The only way to stop billing is to **destroy the droplet**.
+
+### Pricing Overview
+
+| Duration | Cost (H200 @ $3.44/hr) |
+|----------|------------------------|
+| 1 hour | $3.44 |
+| 8 hours | $27.52 |
+| 24 hours | $82.56 |
+| 1 week | $578 |
+
+### Using Snapshots to Save Money
+
+Snapshots let you save your configured droplet state, destroy the droplet to stop billing, and restore it later.
+
+**Snapshot Pricing**: $0.06 per GB per month
+
+For example, if your snapshot is 100GB:
+- Monthly storage cost: $6/month ($0.20/day)
+- Much cheaper than keeping a $3.44/hr droplet running
+
+### Creating a Snapshot
+
+1. **Via DigitalOcean Console:**
+   - Go to your droplet's page
+   - Click **Snapshots** in the left sidebar
+   - Click **Take Snapshot**
+   - Enter a name (e.g., `polyquant-configured-2026-01-17`)
+   - Wait for completion (can take 10-30 minutes depending on size)
+
+2. **Via CLI (doctl):**
+   ```bash
+   # Install doctl if needed
+   # See: https://docs.digitalocean.com/reference/doctl/how-to/install/
+
+   # Authenticate
+   doctl auth init
+
+   # List your droplets to get the ID
+   doctl compute droplet list
+
+   # Create snapshot (replace DROPLET_ID)
+   doctl compute droplet-action snapshot DROPLET_ID --snapshot-name "polyquant-configured"
+   ```
+
+### Recommended Workflow
+
+1. **First time setup:**
+   - Create droplet
+   - Set up Python environment, install dependencies
+   - Transfer data files
+   - **Create a snapshot** (before running any training)
+   - This snapshot is your "ready to train" baseline
+
+2. **Training session:**
+   - Restore from snapshot (or create new droplet from snapshot)
+   - Pull latest code: `git pull`
+   - Run training
+   - Download checkpoints to local machine
+   - **Destroy the droplet** (not just power off!)
+
+3. **Next training session:**
+   - Create new droplet from your snapshot
+   - Your environment and data are already there
+   - Just `git pull` and start training
+
+### Restoring from a Snapshot
+
+1. Go to **Images** → **Snapshots** in DigitalOcean console
+2. Find your snapshot
+3. Click **More** → **Create Droplet**
+4. Select the same GPU droplet type
+5. Your droplet will boot with everything intact
+
+### Important Notes
+
+- **Power Off ≠ Stop Billing**: A powered-off droplet still costs money
+- **Only Destroy Stops Billing**: You must destroy the droplet to stop charges
+- **Snapshots persist**: Your snapshot remains even after destroying the droplet
+- **Data not in snapshot**: If you generated new data/checkpoints, download them before destroying!
+
+### Cost Comparison Example
+
+**Scenario**: You train for 8 hours, then wait 1 week before next session
+
+| Approach | Cost |
+|----------|------|
+| Keep droplet running (24/7 for 1 week) | $578 |
+| Destroy + Snapshot (100GB, 1 week) | $27.52 (training) + $1.40 (storage) = **$28.92** |
+
+**Savings: ~$549**
 
 ---
 
