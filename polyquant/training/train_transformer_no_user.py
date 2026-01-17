@@ -259,14 +259,10 @@ def main():
     # Resume or new run
     if args.resume:
         ckpt_path = Path(args.resume).resolve()
-        ckpt = torch.load(ckpt_path, map_location="cpu")
-        wandb_run_id = ckpt.get("wandb_run_id")
         ckpt_dir = ckpt_path.parent
         run_name, global_step, epoch = load_checkpoint(
             ckpt_path, model, optimizer, None, scaler, device
         )
-        if wandb_run_id is None:
-            print("[WARN] Checkpoint has no wandb_run_id; a new W&B run will be created.")
     else:
         run_name = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_transformer_no_user"
         global_step = 0
@@ -274,13 +270,12 @@ def main():
         ckpt_dir = CKPT_ROOT / run_name
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         print(f"[INFO] Starting new run: {run_name}")
-        wandb_run_id = None
 
     wandb.init(
         project="polyquant",
+        id=run_name,  # Use run_name as unique ID so resume works
         name=run_name,
         dir=str(RUNS_DIR),
-        id=wandb_run_id,
         config={
             "model_size": args.model_size,
             "batch_size": BATCH_SIZE,
@@ -297,7 +292,7 @@ def main():
             "amp_enabled": AMP_ENABLED,
             "resumed_from": args.resume or "fresh",
         },
-        resume="allow" if args.resume else None,
+        resume="must" if args.resume else "never",  # Force resume or force new
     )
 
     # Training loop
@@ -409,7 +404,6 @@ def main():
                     optimizer=optimizer,
                     scheduler=None,
                     scaler=scaler,
-                    extra={"wandb_run_id": wandb.run.id},
                 )
 
     # Final checkpoint
@@ -422,7 +416,6 @@ def main():
         optimizer=optimizer,
         scheduler=None,
         scaler=scaler,
-        extra={"wandb_run_id": wandb.run.id},
     )
     wandb.finish()
     print(f"[DONE] Finished at step {global_step}, epoch {epoch}")
