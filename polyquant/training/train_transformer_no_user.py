@@ -26,6 +26,7 @@ from polyquant.models.transformer import (
     create_small_transformer_no_user,
 )
 from polyquant.utils import load_checkpoint, save_checkpoint
+from polyquant.metrics import MetricsAccumulator, log_metrics_to_wandb, log_train_metrics_to_wandb
 
 
 # ===========================
@@ -132,21 +133,39 @@ def set_lr(optimizer: torch.optim.Optimizer, lr: float):
 # EVALUATION
 # ===========================
 
+def get_last_valid_values(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """
+    Extract the value at the last valid position for each sequence.
+
+    Args:
+        x: (B, L) or (B, L, D) tensor
+        mask: (B, L) boolean mask where True = valid
+
+    Returns:
+        (B,) or (B, D) tensor with last valid values
+    """
+    B = x.size(0)
+    device = x.device
+    # Find last valid index per sequence
+    last_valid_idx = mask.long().cumsum(dim=1).argmax(dim=1)  # (B,)
+    batch_idx = torch.arange(B, device=device)
+
+    if x.dim() == 2:
+        return x[batch_idx, last_valid_idx]
+    else:  # x.dim() == 3
+        return x[batch_idx, last_valid_idx, :]
+
+
 @torch.no_grad()
 def evaluate(model, loader, device, max_batches: int) -> dict:
     """
     Evaluate on validation set.
 
     Returns:
-        dict with bce, accuracy, auc (if sklearn available)
+        dict with bce, misclass, mae_edge, profitability metrics, auc
     """
     model.eval()
-
-    total_loss = 0.0
-    total_correct = 0
-    total_n = 0
-    all_probs = []
-    all_labels = []
+    metrics = MetricsAccumulator()
 
     batches = 0
     for x, u, mask, y in loader:
@@ -154,45 +173,22 @@ def evaluate(model, loader, device, max_batches: int) -> dict:
         mask = mask.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
 
+        # Extract price from last valid position (p_yes is first feature, index 0)
+        price = get_last_valid_values(x[:, :, 0], mask)  # (B,)
+
         logits = model(x, mask)
         loss = F.binary_cross_entropy_with_logits(logits, y.float())
 
-        probs = torch.sigmoid(logits)
-        preds = (probs > 0.5).long()
-        correct = (preds == y).sum()
+        # Edge is y - price
+        edge = y.float() - price
 
-        n = x.size(0)
-        total_loss += float(loss) * n
-        total_correct += int(correct)
-        total_n += n
-
-        all_probs.append(probs.detach().cpu())
-        all_labels.append(y.detach().cpu())
+        metrics.update(logits, y, price=price, loss=float(loss), edge=edge)
 
         batches += 1
         if batches >= max_batches:
             break
 
-    if total_n == 0:
-        return {"bce": float("nan"), "accuracy": float("nan")}
-
-    metrics = {
-        "bce": total_loss / total_n,
-        "accuracy": total_correct / total_n,
-    }
-
-    # Compute AUC if sklearn is available
-    try:
-        from sklearn.metrics import roc_auc_score
-
-        all_probs = torch.cat(all_probs).numpy()
-        all_labels = torch.cat(all_labels).numpy()
-        if len(set(all_labels)) > 1:
-            metrics["auc"] = roc_auc_score(all_labels, all_probs)
-    except ImportError:
-        pass
-
-    return metrics
+    return metrics.compute()
 
 
 # ===========================
@@ -348,23 +344,27 @@ def main():
             # Logging
             if global_step % LOG_EVERY_STEPS == 0:
                 avg_loss = running_loss / max(running_n, 1)
-                avg_acc = running_correct / max(running_n, 1)
                 elapsed = time.time() - t0
                 steps_per_sec = global_step / max(elapsed, 1e-6)
 
-                wandb.log(
-                    {
-                        "train/bce": avg_loss,
-                        "train/accuracy": avg_acc,
-                        "train/lr": lr,
-                        "train/steps_per_sec": steps_per_sec,
-                    },
+                # Extract price from last valid position for this batch
+                price = get_last_valid_values(x[:, :, 0], mask)
+                edge = y.float() - price
+
+                log_train_metrics_to_wandb(
+                    loss=avg_loss,
+                    logits=logits,
+                    y=y,
+                    price=price,
+                    edge=edge,
+                    lr=lr,
+                    steps_per_sec=steps_per_sec,
                     step=global_step,
                 )
 
                 print(
                     f"[STEP {global_step:5d}] "
-                    f"loss={avg_loss:.4f} acc={avg_acc:.3f} "
+                    f"loss={avg_loss:.4f} "
                     f"lr={lr:.2e} ({steps_per_sec:.1f} steps/s)"
                 )
 
@@ -376,18 +376,13 @@ def main():
             # Validation
             if global_step % VAL_EVERY_STEPS == 0:
                 val_metrics = evaluate(model, val_loader, device, VAL_MAX_BATCHES)
-
-                val_log = {
-                    f"val/{k}": v
-                    for k, v in val_metrics.items()
-                    if v is not None and isinstance(v, float) and not math.isnan(v)
-                }
-                if val_log:
-                    wandb.log(val_log, step=global_step)
+                log_metrics_to_wandb(val_metrics, step=global_step, prefix="val")
 
                 print(
                     f"[VAL   {global_step:5d}] "
-                    f"bce={val_metrics['bce']:.4f} acc={val_metrics['accuracy']:.3f} "
+                    f"bce={val_metrics.get('bce', float('nan')):.4f} "
+                    f"misclass={val_metrics.get('misclass', float('nan')):.3f} "
+                    f"mae_edge={val_metrics.get('mae_edge', float('nan')):.4f} "
                     f"auc={val_metrics.get('auc', float('nan')):.3f}"
                 )
 
