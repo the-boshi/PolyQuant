@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 import torch
 import torch.nn as nn
 
@@ -11,6 +12,7 @@ def save_checkpoint(
     optimizer: torch.optim.Optimizer,
     scheduler,
     scaler,
+    extra: Optional[dict] = None,
 ) -> Path:
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = ckpt_dir / f"step_{step:07d}.pt"
@@ -24,6 +26,8 @@ def save_checkpoint(
         "scheduler": scheduler.state_dict() if scheduler is not None else None,
         "scaler": scaler.state_dict() if scaler is not None else None,
     }
+    if extra:
+        payload.update(extra)
     torch.save(payload, ckpt_path)
     print(f"[CKPT] Saved checkpoint: {ckpt_path}")
     return ckpt_path
