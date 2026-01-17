@@ -223,7 +223,52 @@ EOF
 
 ---
 
-## Step 9: Run Training
+## Step 9: Set Up Weights & Biases (wandb)
+
+The training scripts log metrics to wandb. Set it up once on the droplet:
+
+```bash
+cd /root/polyquant
+source venv/bin/activate
+
+# Login to wandb (interactive)
+wandb login
+```
+
+This will prompt you to:
+1. Go to https://wandb.ai/authorize
+2. Copy your API key
+3. Paste it in the terminal
+
+The key is saved to `~/.netrc` so you only need to do this once.
+
+### Alternative: Environment Variable
+
+For non-interactive setup or scripts:
+
+```bash
+# Get your API key from: https://wandb.ai/settings → API keys
+export WANDB_API_KEY="your-api-key-here"
+
+# Add permanently to shell (optional)
+echo 'export WANDB_API_KEY="your-api-key-here"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+### Offline Mode (optional)
+
+If you want to train without uploading metrics:
+
+```bash
+export WANDB_MODE=offline
+
+# Later, sync runs manually when you have internet
+wandb sync runs/wandb/run-xxx
+```
+
+---
+
+## Step 10: Run Training
 
 Use `tmux` to keep the training running even if you disconnect:
 
