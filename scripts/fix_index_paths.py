@@ -29,7 +29,7 @@ import pyarrow.parquet as pq
 # Path to the index.parquet file (relative to this script's location)
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
-INDEX_PATH = PROJECT_ROOT / "data" / "sequences" / "sequences" / "index.parquet"
+INDEX_PATH = PROJECT_ROOT / "data" / "sequences" / "index.parquet"
 
 
 def normalize_path_to_relative(abs_path: str) -> str:
