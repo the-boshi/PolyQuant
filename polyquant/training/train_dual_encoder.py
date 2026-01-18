@@ -42,8 +42,8 @@ MARKET_INDEX_PATH = PATHS.root / "data" / "sequences" / "index.parquet"
 USER_INDEX_PATH = PATHS.root / "data" / "user_sequences_store" / "index.parquet"
 
 # DataLoader
-BATCH_SIZE = 32
-NUM_WORKERS = 4
+BATCH_SIZE = 512
+NUM_WORKERS = 8
 L_MARKET = 1024
 L_USER = 128
 CAP_TRADES = 4096
@@ -51,14 +51,14 @@ MIN_PREFIX = 20
 
 # Training
 MAX_STEPS = 100_000
-LOG_EVERY_STEPS = 100
-VAL_EVERY_STEPS = 500
+LOG_EVERY_STEPS = 10
+VAL_EVERY_STEPS = 100
 VAL_MAX_BATCHES = 100
-CHECKPOINT_EVERY_STEPS = 5_000
+CHECKPOINT_EVERY_STEPS = 500
 
 # Optimizer
-LR = 3e-4
-LR_MIN = 1e-6
+LR = 3e-6
+LR_MIN = 1e-8
 WEIGHT_DECAY = 0.05
 WARMUP_STEPS = 2000
 
@@ -380,7 +380,7 @@ def main():
 
     while global_step < MAX_STEPS:
         epoch += 1
-        print(f"[EPOCH] {epoch}, starting at step {global_step}")
+        print(f"[EPOCH] {epoch}, starting at step {global_step}", flush=True)
 
         for batch in train_loader:
             if global_step >= MAX_STEPS:
@@ -405,6 +405,8 @@ def main():
             price = get_price_from_batch(market_x, market_mask)
 
             if valid.sum() == 0:
+                if global_step % LOG_EVERY_STEPS == 0:
+                    print(f"[STEP {global_step}] SKIPPED - no valid samples", flush=True)
                 continue
 
             optimizer.zero_grad(set_to_none=True)
@@ -446,6 +448,7 @@ def main():
                     true_edge = y_valid - price_valid
                     mae_edge = torch.abs(pred_edge - true_edge).mean()
 
+                print(f"[STEP {global_step}] loss={float(loss):.4f} misclass={float(misclass):.4f} lr={lr:.6f}", flush=True)
                 wandb.log(
                     {
                         "train/bce": float(loss),

@@ -288,9 +288,11 @@ class DualSequenceDataset(torch.utils.data.Dataset):
         timestamps = timestamps[start : end + 1]
         user_hashes = user_hashes[start : end + 1]
 
-        # y masking based on market resolve time
+        # y value for all trades in window (final market outcome)
+        # Note: max_ts is the max trade timestamp, not resolution time,
+        # so we use the final y value directly for the target
         y_val = float(row.y)
-        y_market = np.where(timestamps < row.max_ts, 0.5, y_val).astype(np.float32, copy=False)
+        y_market = np.full((x_np.shape[0],), y_val, dtype=np.float32)
 
         # User lookup based on last trade in the market window
         last_timestamp = int(timestamps[-1])

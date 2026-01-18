@@ -8,6 +8,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+import numpy as np
 import torch
 import wandb
 
@@ -172,7 +173,11 @@ class MetricsAccumulator:
                 from sklearn.metrics import roc_auc_score
                 all_probs = torch.cat(self.all_probs).numpy()
                 all_labels = torch.cat(self.all_labels).numpy()
-                if len(set(all_labels)) > 1:
+                # Filter out NaN values
+                valid_mask = ~(np.isnan(all_probs) | np.isnan(all_labels))
+                all_probs = all_probs[valid_mask]
+                all_labels = all_labels[valid_mask]
+                if len(all_probs) > 0 and len(set(all_labels)) > 1:
                     out[f"{prefix}auc"] = float(roc_auc_score(all_labels, all_probs))
             except ImportError:
                 pass
@@ -221,6 +226,7 @@ def log_metrics_to_wandb(
     metrics: dict[str, float],
     step: int,
     prefix: str = "val",
+    commit: bool = False,
 ) -> None:
     """
     Log metrics dictionary to Weights & Biases.
@@ -231,6 +237,7 @@ def log_metrics_to_wandb(
         metrics: Dictionary from MetricsAccumulator.compute()
         step: Global training step
         prefix: Prefix for metric keys (e.g., "val", "train", "test")
+        commit: Whether to commit the log (advance wandb step)
     """
     log_dict = {}
     for k, v in metrics.items():
@@ -243,7 +250,7 @@ def log_metrics_to_wandb(
         log_dict[f"{prefix}/{k}"] = v
 
     if log_dict:
-        wandb.log(log_dict, step=step)
+        wandb.log(log_dict, step=step, commit=commit)
 
 
 def log_train_metrics_to_wandb(
