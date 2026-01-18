@@ -7,11 +7,53 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+import duckdb
 import numpy as np
 from tqdm import tqdm
 import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
+
+
+USER_VOCAB = 2_000_000
+
+# Cached DuckDB connection for hash computation
+_duckdb_con = None
+
+
+def _get_duckdb_con():
+    """Get cached DuckDB connection for hash computation."""
+    global _duckdb_con
+    if _duckdb_con is None:
+        _duckdb_con = duckdb.connect()
+    return _duckdb_con
+
+
+def _compute_user_hash(user_id: str) -> int:
+    """Compute user_hash matching DuckDB's hash function."""
+    con = _get_duckdb_con()
+    result = con.execute(
+        f"SELECT (ABS(hash('{user_id}')) % {USER_VOCAB})::UBIGINT"
+    ).fetchone()[0]
+    return int(result)
+
+
+def _compute_user_hashes_batch(user_ids: List[str]) -> Dict[str, int]:
+    """Compute user_hash for a batch of user_ids efficiently."""
+    if not user_ids:
+        return {}
+    con = _get_duckdb_con()
+    # Create a temp table with user_ids and compute hashes in one query
+    user_table = pa.table({"user_id": user_ids})
+    con.register("user_ids_temp", user_table)
+    result = con.execute(
+        f"""
+        SELECT user_id, (ABS(hash(user_id)) % {USER_VOCAB})::UBIGINT AS user_hash
+        FROM user_ids_temp
+        """
+    ).fetchall()
+    con.unregister("user_ids_temp")
+    return {str(uid): int(h) for uid, h in result}
 
 
 @dataclass(frozen=True)
@@ -127,13 +169,20 @@ class DualSequenceDataset(torch.utils.data.Dataset):
             for r in tqdm(market_idx.itertuples(index=False), total=len(market_idx), desc=f"Loading {split} markets")
         ]
 
-        # Load user index
+        # Load user index (keyed by user_hash to match market sequences)
         user_idx = pq.read_table(user_index_path).to_pandas()
         user_idx = user_idx[user_idx["split"] == split].copy()
 
-        self.user_rows: Dict[str, UserRow] = {}
+        # Compute user hashes in batch for efficiency
+        user_id_list = [str(r.user_id) for r in user_idx.itertuples(index=False)]
+        print(f"Computing user hashes for {len(user_id_list)} users...")
+        user_hash_map = _compute_user_hashes_batch(user_id_list)
+
+        self.user_rows: Dict[int, UserRow] = {}
         for r in tqdm(user_idx.itertuples(index=False), total=len(user_idx), desc=f"Loading {split} users"):
-            self.user_rows[str(r.user_id)] = UserRow(
+            user_id = str(r.user_id)
+            user_hash = user_hash_map[user_id]
+            self.user_rows[user_hash] = UserRow(
                 path=_resolve_shard_path(user_index_path, str(r.path)),
                 start=int(r.start),
                 length=int(r.length),
@@ -155,7 +204,7 @@ class DualSequenceDataset(torch.utils.data.Dataset):
             "user_pnl_std_log",
         ]
         self.market_ts_col = ["timestamp"]
-        self.market_user_col = ["user_id"]
+        self.market_user_col = ["user_hash"]
         self.market_cols = self.market_ts_col + self.market_user_col + self.market_float_cols
 
         # User columns (from user_sequences_store shards)
@@ -230,14 +279,14 @@ class DualSequenceDataset(torch.utils.data.Dataset):
         floats = [self._col_np(tab, c, np.float32) for c in self.market_float_cols]
         x_np = np.stack(floats, axis=1).astype(np.float32, copy=False)
         timestamps = self._col_np(tab, "timestamp", np.int64)
-        user_ids = tab["user_id"].to_pylist()
+        user_hashes = tab["user_hash"].to_pylist()
 
         # Take last L_market from the read window (ending at n)
         end = x_np.shape[0] - 1
         start = max(0, end - self.L_market + 1)
         x_np = x_np[start : end + 1]
         timestamps = timestamps[start : end + 1]
-        user_ids = user_ids[start : end + 1]
+        user_hashes = user_hashes[start : end + 1]
 
         # y masking based on market resolve time
         y_val = float(row.y)
@@ -245,7 +294,7 @@ class DualSequenceDataset(torch.utils.data.Dataset):
 
         # User lookup based on last trade in the market window
         last_timestamp = int(timestamps[-1])
-        last_user_id = str(user_ids[-1])
+        last_user_hash = int(user_hashes[-1])
 
         # Pad market sequence
         pad = self.L_market - x_np.shape[0]
@@ -262,7 +311,7 @@ class DualSequenceDataset(torch.utils.data.Dataset):
         user_y = np.full((self.L_user,), 0.5, dtype=np.float32)
         user_mask = np.zeros((self.L_user,), dtype=np.bool_)
 
-        user_row = self.user_rows.get(last_user_id)
+        user_row = self.user_rows.get(last_user_hash)
         if user_row is not None and user_row.length > 0:
             user_pf = self._user_pf.get(user_row.path)
             user_tab = self._read_user_range(user_pf, user_row.start, user_row.length)

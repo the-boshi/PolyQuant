@@ -7,3 +7,4 @@ polars
 matplotlib
 wandb
 scikit-learn
+duckdb
