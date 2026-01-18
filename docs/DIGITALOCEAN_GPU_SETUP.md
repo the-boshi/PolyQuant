@@ -51,7 +51,7 @@ Connect VS Code directly to the droplet for a full IDE experience:
 
 3. **Open the project folder**:
    - Once connected, click **"Open Folder"**
-   - Navigate to `/root/polyquant`
+   - Navigate to `/root/PolyQuant`
 
 **Benefits of VS Code Remote SSH:**
 - Full VS Code experience on the remote machine
@@ -83,7 +83,7 @@ nvidia-smi
 apt install -y python3.11 python3.11-venv python3-pip git tmux htop
 
 # Create project directory
-mkdir -p /root/polyquant
+mkdir -p /root/PolyQuant
 ```
 
 ---
@@ -117,12 +117,12 @@ ssh -T git@github.com
 cd /root
 
 # For private repo (SSH):
-git clone git@github.com:<YOUR_USERNAME>/PolyQuant.git polyquant
+git clone git@github.com:<YOUR_USERNAME>/PolyQuant.git
 
 # For public repo (HTTPS):
-# git clone https://github.com/<YOUR_USERNAME>/PolyQuant.git polyquant
+# git clone https://github.com/<YOUR_USERNAME>/PolyQuant.git
 
-cd polyquant
+cd PolyQuant
 ```
 
 ---
@@ -130,7 +130,7 @@ cd polyquant
 ## Step 6: Set Up Python Environment
 
 ```bash
-cd /root/polyquant
+cd /root/PolyQuant
 
 # Create virtual environment
 python3.11 -m venv venv
@@ -179,13 +179,13 @@ tar -cvzf user_sequences_store.tar.gz user_sequences_store
 Get-ChildItem *.tar.gz | Select-Object Name, @{Name="SizeGB";Expression={[math]::Round($_.Length/1GB, 2)}}
 
 # Transfer all to droplet
-scp features_full.tar.gz sequences.tar.gz user_sequences_store.tar.gz root@<YOUR_DROPLET_IP>:/root/polyquant/data/
+scp features_full.tar.gz sequences.tar.gz user_sequences_store.tar.gz root@<YOUR_DROPLET_IP>:/root/PolyQuant/data/
 ```
 
 ### On the Droplet:
 
 ```bash
-cd /root/polyquant/data
+cd /root/PolyQuant/data
 
 # Extract all archives
 tar -xvzf features_full.tar.gz
@@ -208,7 +208,7 @@ ls -la user_sequences_store/
 Update `config.json` for the Linux environment:
 
 ```bash
-cd /root/polyquant
+cd /root/PolyQuant
 
 cat > config.json << 'EOF'
 {
@@ -223,7 +223,52 @@ EOF
 
 ---
 
-## Step 9: Run Training
+## Step 9: Set Up Weights & Biases (wandb)
+
+The training scripts log metrics to wandb. Set it up once on the droplet:
+
+```bash
+cd /root/PolyQuant
+source venv/bin/activate
+
+# Login to wandb (interactive)
+wandb login
+```
+
+This will prompt you to:
+1. Go to https://wandb.ai/authorize
+2. Copy your API key
+3. Paste it in the terminal
+
+The key is saved to `~/.netrc` so you only need to do this once.
+
+### Alternative: Environment Variable
+
+For non-interactive setup or scripts:
+
+```bash
+# Get your API key from: https://wandb.ai/settings → API keys
+export WANDB_API_KEY="your-api-key-here"
+
+# Add permanently to shell (optional)
+echo 'export WANDB_API_KEY="your-api-key-here"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+### Offline Mode (optional)
+
+If you want to train without uploading metrics:
+
+```bash
+export WANDB_MODE=offline
+
+# Later, sync runs manually when you have internet
+wandb sync runs/wandb/run-xxx
+```
+
+---
+
+## Step 10: Run Training
 
 Use `tmux` to keep the training running even if you disconnect:
 
@@ -232,7 +277,7 @@ Use `tmux` to keep the training running even if you disconnect:
 tmux new -s train
 
 # Activate environment
-cd /root/polyquant
+cd /root/PolyQuant
 source venv/bin/activate
 
 # Start training
@@ -266,7 +311,7 @@ tail -f runs/<run_name>/train.log
 
 ### Pull Latest Code Changes
 ```bash
-cd /root/polyquant
+cd /root/PolyQuant
 git pull
 ```
 
@@ -283,7 +328,7 @@ git push
 
 ### On the Droplet:
 ```bash
-cd /root/polyquant
+cd /root/PolyQuant
 git pull
 ```
 
@@ -295,7 +340,7 @@ To download trained checkpoints back to your local machine:
 
 ```powershell
 # From Windows PowerShell
-scp -r root@<YOUR_DROPLET_IP>:/root/polyquant/checkpoints/<run_name> E:\Roy_Data\Projects\Technion\deep-project\PolyQuant\checkpoints\
+scp -r root@<YOUR_DROPLET_IP>:/root/PolyQuant/checkpoints/<run_name> E:\Roy_Data\Projects\Technion\deep-project\PolyQuant\checkpoints\
 ```
 
 ---
@@ -421,7 +466,7 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 ### Out of disk space
 ```bash
 # Check usage
-du -sh /root/polyquant/*
+du -sh /root/PolyQuant/*
 
 # Clean up old runs/checkpoints if needed
 rm -rf runs/old_run_name
