@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
+from tqdm import tqdm
 import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
@@ -123,7 +124,7 @@ class DualSequenceDataset(torch.utils.data.Dataset):
                 y=int(r.y),
                 max_ts=int(r.max_ts),
             )
-            for r in market_idx.itertuples(index=False)
+            for r in tqdm(market_idx.itertuples(index=False), total=len(market_idx), desc=f"Loading {split} markets")
         ]
 
         # Load user index
@@ -131,7 +132,7 @@ class DualSequenceDataset(torch.utils.data.Dataset):
         user_idx = user_idx[user_idx["split"] == split].copy()
 
         self.user_rows: Dict[str, UserRow] = {}
-        for r in user_idx.itertuples(index=False):
+        for r in tqdm(user_idx.itertuples(index=False), total=len(user_idx), desc=f"Loading {split} users"):
             self.user_rows[str(r.user_id)] = UserRow(
                 path=_resolve_shard_path(user_index_path, str(r.path)),
                 start=int(r.start),

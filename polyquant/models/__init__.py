@@ -8,6 +8,11 @@ from polyquant.models.transformer import (
     create_small_trade_transformer,
     create_base_trade_transformer,
 )
+from polyquant.models.dual_encoder import (
+    DualEncoderTransformer,
+    create_small_dual_encoder,
+    create_base_dual_encoder,
+)
 
 __all__ = [
     "MLP",
@@ -19,4 +24,7 @@ __all__ = [
     "create_base_transformer",
     "create_small_trade_transformer",
     "create_base_trade_transformer",
+    "DualEncoderTransformer",
+    "create_small_dual_encoder",
+    "create_base_dual_encoder",
 ]
