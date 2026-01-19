@@ -54,6 +54,7 @@ class MetricsAccumulator:
         price: torch.Tensor | None = None,
         loss: float | None = None,
         edge: torch.Tensor | None = None,
+        outcome_index: torch.Tensor | None = None,
         store_for_auc: bool = True,
     ):
         """
@@ -61,10 +62,11 @@ class MetricsAccumulator:
 
         Args:
             logits: Model outputs before sigmoid, shape [B] or [B, 1]
-            y: Ground truth labels {0, 1}, shape [B]
+            y: Ground truth labels {0, 1}, shape [B] (market outcome: 1=YES won, 0=NO won)
             price: Prices in [0, 1], shape [B]. If None, edge/profitability metrics are skipped.
             loss: Pre-computed loss value (if None, not accumulated)
-            edge: True edge = y - price (if None, computed from y and price)
+            edge: True edge (profit per unit) for each trade. If None, computed from y, price, and outcome_index.
+            outcome_index: Bet direction, shape [B] (1=YES bet, 0=NO bet). Required for correct PnL if edge is None.
             store_for_auc: Whether to store predictions for AUC computation
         """
         logits = logits.view(-1)
@@ -99,21 +101,33 @@ class MetricsAccumulator:
             baseline_misclass = (baseline_preds != y).float().mean()
             self.total_baseline_misclass += float(baseline_misclass) * n
 
-            # Edge MAE
-            if edge is None:
-                true_edge = y.float() - price
-            else:
+            # Compute true edge (profit per unit) correctly for both YES and NO bets
+            # For YES bets (outcome_index=1): trade wins if y=1, profit = y - price
+            # For NO bets (outcome_index=0): trade wins if y=0, profit = (1-y) - price
+            if edge is not None:
                 true_edge = edge.view(-1)
+            elif outcome_index is not None:
+                outcome_index = outcome_index.view(-1)
+                # trade_won = 1 when bet direction matches market outcome
+                # YES bet (oi=1) wins when y=1; NO bet (oi=0) wins when y=0
+                trade_won = (y.float() * outcome_index + (1 - y.float()) * (1 - outcome_index))
+                true_edge = trade_won - price
+            else:
+                # Legacy fallback: assume all YES bets (incorrect for NO bets!)
+                true_edge = y.float() - price
+
             mae_edge = torch.abs(pred_edge - true_edge).mean()
             self.total_mae_edge += float(mae_edge) * n
 
             # Profitability metrics (tau=0: take when pred_edge > 0)
-            realized = y.float() - price  # profit per unit
+            # Use true_edge as realized profit (already accounts for bet direction)
+            realized = true_edge
             take = pred_edge > 0
             if take.any():
                 self.pnl_sum += float(realized[take].sum())
                 self.take_sum += int(take.sum().item())
-                self.win_sum += int((y[take] > 0.5).sum().item())
+                # Count trades that actually won (realized > 0)
+                self.win_sum += int((realized[take] > 0).sum().item())
 
     def compute(self, prefix: str = "") -> dict[str, float]:
         """

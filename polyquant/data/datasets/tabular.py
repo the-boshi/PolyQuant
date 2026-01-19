@@ -68,6 +68,7 @@ class TabularParquetIterable(IterableDataset):
         self.price_col = "price"
         self.edge_col = "edge"
         self.size_col = "log_usdc_size"
+        self.outcome_index_col = "outcome_index"
 
     def _iter_files_for_worker(self) -> List[Path]:
         files = list(self.files)
@@ -94,6 +95,7 @@ class TabularParquetIterable(IterableDataset):
             self.price_col,
             self.edge_col,
             self.size_col,
+            self.outcome_index_col,
         ]
 
         wi = get_worker_info()
@@ -135,12 +137,14 @@ class TabularParquetIterable(IterableDataset):
                 p_list = [row["price"] for row in batch_rows]
                 e_list = [row["edge"] for row in batch_rows]
                 s_list = [row["log_usdc_size"] for row in batch_rows]
+                o_list = [row["outcome_index"] for row in batch_rows]
 
                 xb = torch.from_numpy(np.stack(x_list).astype(np.float32, copy=False))
                 yb = torch.from_numpy(np.asarray(y_list, dtype=np.float32))
                 pb = torch.from_numpy(np.asarray(p_list, dtype=np.float32))
                 eb = torch.from_numpy(np.asarray(e_list, dtype=np.float32))
                 sb = torch.from_numpy(np.asarray(s_list, dtype=np.float32))
+                ob = torch.from_numpy(np.asarray(o_list, dtype=np.float32))
 
                 yield {
                     "x": xb,
@@ -148,6 +152,7 @@ class TabularParquetIterable(IterableDataset):
                     "price": pb,
                     "edge": eb,
                     "log_usdc_size": sb,
+                    "outcome_index": ob,
                 }
 
                 i += self.batch_size
@@ -194,6 +199,11 @@ class TabularParquetIterable(IterableDataset):
                     .to_numpy(zero_copy_only=False)
                     .astype(np.float32, copy=False)
                 )
+                outcome_index = (
+                    table.column(self.outcome_index_col)
+                    .to_numpy(zero_copy_only=False)
+                    .astype(np.float32, copy=False)
+                )
 
                 n = x.shape[0]
                 indices = np.arange(n)
@@ -209,6 +219,7 @@ class TabularParquetIterable(IterableDataset):
                         "price": price[idx],
                         "edge": edge[idx],
                         "log_usdc_size": log_usdc[idx],
+                        "outcome_index": outcome_index[idx],
                     }
                     buffer.append(row)
 
