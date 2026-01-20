@@ -51,7 +51,7 @@ MIN_PREFIX = 20
 
 # Training
 MAX_STEPS = 100_000
-LOG_EVERY_STEPS = 10
+LOG_EVERY_EPOCH_FRACTION = 0.05  # Log every 5% of an epoch
 VAL_EVERY_STEPS = 100
 VAL_MAX_BATCHES = 100
 CHECKPOINT_EVERY_STEPS = 500
@@ -175,6 +175,27 @@ def get_price_from_batch(
     return price
 
 
+def get_outcome_index_from_batch(
+    market_x: torch.Tensor,  # (B, L_market, D_market)
+    market_mask: torch.Tensor,  # (B, L_market)
+) -> torch.Tensor:
+    """Extract outcome_index of the target trade (last valid token).
+
+    outcome_index is at index 2 in market_x features:
+    [price, p_yes, outcome_index, dp_yes_clip, ...]
+    """
+    B = market_x.shape[0]
+    device = market_x.device
+
+    last_idx = market_mask.sum(dim=1) - 1
+    last_idx = last_idx.clamp(min=0)
+
+    batch_idx = torch.arange(B, device=device)
+    outcome_index = market_x[batch_idx, last_idx, 2]  # (B,)
+
+    return outcome_index
+
+
 # ===========================
 # EVALUATION
 # ===========================
@@ -206,9 +227,10 @@ def evaluate(model, loader, device, max_batches: int) -> dict:
         # Concatenate user_y as 4th feature for user encoder
         user_x_with_y = torch.cat([user_x, user_y.unsqueeze(-1)], dim=-1)
 
-        # Get target, validity, and price
+        # Get target, validity, price, and outcome_index
         y, valid = get_target_from_batch(market_y, market_mask)
         price = get_price_from_batch(market_x, market_mask)
+        outcome_index = get_outcome_index_from_batch(market_x, market_mask)
 
         if valid.sum() == 0:
             batches += 1
@@ -224,16 +246,16 @@ def evaluate(model, loader, device, max_batches: int) -> dict:
         logits_valid = logits[valid_idx]
         y_valid = y[valid_idx]
         price_valid = price[valid_idx]
+        outcome_index_valid = outcome_index[valid_idx]
 
         loss = loss_fn(logits_valid, y_valid)
-        edge = y_valid - price_valid
 
         metrics.update(
             logits_valid,
             y_valid,
             price_valid,
             loss=float(loss),
-            edge=edge,
+            outcome_index=outcome_index_valid,
         )
 
         batches += 1
@@ -374,6 +396,11 @@ def main():
     print("[DEBUG] Starting training loop...")
     loss_fn = torch.nn.BCEWithLogitsLoss(reduction="none")
 
+    # Calculate steps per epoch for fractional logging
+    steps_per_epoch = len(train_loader)
+    log_every_steps = max(1, int(steps_per_epoch * LOG_EVERY_EPOCH_FRACTION))
+    print(f"[INFO] Steps per epoch: {steps_per_epoch}, logging every {log_every_steps} steps ({LOG_EVERY_EPOCH_FRACTION:.0%} of epoch)")
+
     model.train()
     t0 = time.time()
     last_log_time = t0
@@ -400,12 +427,13 @@ def main():
             # Concatenate user_y as 4th feature
             user_x_with_y = torch.cat([user_x, user_y.unsqueeze(-1)], dim=-1)
 
-            # Get target and validity
+            # Get target, validity, price, and outcome_index
             y, valid = get_target_from_batch(market_y, market_mask)
             price = get_price_from_batch(market_x, market_mask)
+            outcome_index = get_outcome_index_from_batch(market_x, market_mask)
 
             if valid.sum() == 0:
-                if global_step % LOG_EVERY_STEPS == 0:
+                if global_step % log_every_steps == 0:
                     print(f"[STEP {global_step}] SKIPPED - no valid samples", flush=True)
                 continue
 
@@ -428,7 +456,7 @@ def main():
             scheduler.step()
 
             # Train logging
-            if global_step % LOG_EVERY_STEPS == 0:
+            if global_step % log_every_steps == 0:
                 elapsed = time.time() - t0
                 steps_per_sec = global_step / max(elapsed, 1e-6)
                 lr = optimizer.param_groups[0]["lr"]
@@ -439,13 +467,16 @@ def main():
                     logits_valid = logits[valid_idx]
                     y_valid = y[valid_idx]
                     price_valid = price[valid_idx]
+                    outcome_index_valid = outcome_index[valid_idx]
 
                     probs = torch.sigmoid(logits_valid)
                     preds = (probs > 0.5).to(y_valid.dtype)
                     misclass = (preds != y_valid).float().mean()
 
                     pred_edge = probs - price_valid
-                    true_edge = y_valid - price_valid
+                    # Correct edge: YES bet (oi=1) wins if y=1, NO bet (oi=0) wins if y=0
+                    trade_won = (y_valid * outcome_index_valid + (1 - y_valid) * (1 - outcome_index_valid))
+                    true_edge = trade_won - price_valid
                     mae_edge = torch.abs(pred_edge - true_edge).mean()
 
                 print(f"[STEP {global_step}] loss={float(loss):.4f} misclass={float(misclass):.4f} lr={lr:.6f}", flush=True)

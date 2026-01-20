@@ -34,7 +34,7 @@ NUM_WORKERS = 12
 
 MAX_STEPS = 1_000_000
 WARMUP_STEPS = 5000  # Longer warmup for stability
-LOG_EVERY_STEPS = 100
+LOG_EVERY_EPOCH_FRACTION = 0.05  # Log every 5% of an epoch
 VAL_EVERY_STEPS = 500
 VAL_MAX_BATCHES = 100
 CHECKPOINT_EVERY_STEPS = 10_000
@@ -200,12 +200,17 @@ def main():
     print("[DEBUG] Starting training loop...")
     loss_fn = torch.nn.BCEWithLogitsLoss()
 
+    # Track steps per epoch dynamically (for IterableDataset without __len__)
+    steps_per_epoch = None
+    log_every_steps = 100  # Default for first epoch
+
     model.train()
     t0 = time.time()
     last_log_time = t0
 
     while global_step < MAX_STEPS:
         epoch += 1
+        epoch_start_step = global_step
         print(f"[EPOCH] {epoch}, starting at step {global_step}")
 
         for batch in train_loader:
@@ -236,7 +241,7 @@ def main():
             scheduler.step()
 
             # TRAIN LOGGING
-            if global_step % LOG_EVERY_STEPS == 0:
+            if global_step % log_every_steps == 0:
                 elapsed = time.time() - t0
                 steps_per_sec = global_step / max(elapsed, 1e-6)
                 lr = optimizer.param_groups[0]["lr"]
@@ -279,6 +284,13 @@ def main():
                     scheduler=scheduler,
                     scaler=scaler,
                 )
+
+        # Update steps_per_epoch after first epoch completes
+        epoch_steps = global_step - epoch_start_step
+        if steps_per_epoch is None and epoch_steps > 0:
+            steps_per_epoch = epoch_steps
+            log_every_steps = max(1, int(steps_per_epoch * LOG_EVERY_EPOCH_FRACTION))
+            print(f"[INFO] Steps per epoch: {steps_per_epoch}, logging every {log_every_steps} steps ({LOG_EVERY_EPOCH_FRACTION:.0%} of epoch)")
 
         # loop over train_loader ends; while-loop will restart a new pass
 
