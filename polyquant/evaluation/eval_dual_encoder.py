@@ -204,12 +204,25 @@ def evaluate(model, loader, device) -> dict:
         # Forward pass
         logits = model(market_x, market_mask, user_x_with_y, user_mask)
 
-        # Filter to valid samples only
+        # Filter to valid samples only (known outcome)
         valid_idx = valid.nonzero(as_tuple=True)[0]
         logits_valid = logits[valid_idx]
         y_valid = y[valid_idx]
         price_valid = price[valid_idx]
         outcome_index_valid = outcome_index[valid_idx]
+
+        # Also filter out samples where model produced NaN
+        # (can happen with short sequences due to transformer attention issues)
+        non_nan_mask = ~logits_valid.isnan()
+        if non_nan_mask.sum() == 0:
+            skipped_batches += 1
+            n_batches += 1
+            continue
+
+        logits_valid = logits_valid[non_nan_mask]
+        y_valid = y_valid[non_nan_mask]
+        price_valid = price_valid[non_nan_mask]
+        outcome_index_valid = outcome_index_valid[non_nan_mask]
 
         loss = loss_fn(logits_valid, y_valid)
 
