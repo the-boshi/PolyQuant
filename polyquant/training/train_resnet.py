@@ -32,22 +32,22 @@ CKPT_ROOT = PATHS.checkpoints_dir
 BATCH_SIZE = 512  # Reduced from 4096 for GPU memory
 NUM_WORKERS = 12
 
-MAX_STEPS = 1_000_000
+MAX_STEPS = 10_000
 WARMUP_STEPS = 5000  # Longer warmup for stability
 LOG_EVERY_EPOCH_FRACTION = 0.05  # Log every 5% of an epoch
 VAL_EVERY_STEPS = 500
 VAL_MAX_BATCHES = 100
-CHECKPOINT_EVERY_STEPS = 10_000
+CHECKPOINT_EVERY_STEPS = 500
 
-LR = 3e-5  # Reduced from 1e-4 for stability
-LR_MIN = 1e-6
+LR = 3e-6  # Reduced from 1e-4 for stability
+LR_MIN = 1e-8
 WEIGHT_DECAY = 1e-2  # Increased from 1e-3 for regularization
 
-HIDDEN_DIMS = (256, 256, 512, 1024, 512, 512, 1024, 2048, 4096, 1024, 512, 256, 128, 32)  # ResNetMLP hidden layer sizes
-DROPOUT = 0.15  # Slightly increased for regularization
+HIDDEN_DIMS = (256, 512, 1024, 2048, 1024, 512, 256, 128, 32)  # ResNetMLP hidden layer sizes
+DROPOUT = 0.2
 
 GRAD_CLIP_NORM = 0.5  # Tighter gradient clipping
-AMP_ENABLED = False
+AMP_ENABLED = True
 
 
 # ===========================

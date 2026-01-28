@@ -27,8 +27,10 @@ class MetricsAccumulator:
 
     # Core metrics
     total_loss: float = 0.0
+    total_loss_n: int = 0  # Separate counter for loss (to handle NaN skipping)
     total_misclass: float = 0.0
     total_mae_edge: float = 0.0
+    total_mae_edge_n: int = 0  # Separate counter for mae_edge
     total_n: int = 0
 
     # Baseline metric: misclassification when predicting based on price threshold
@@ -80,8 +82,9 @@ class MetricsAccumulator:
         misclass = (preds != y).float().mean()
 
         # Accumulate core metrics
-        if loss is not None:
+        if loss is not None and not math.isnan(loss):
             self.total_loss += float(loss) * n
+            self.total_loss_n += n
         self.total_misclass += float(misclass) * n
         self.total_n += n
 
@@ -117,17 +120,22 @@ class MetricsAccumulator:
                 true_edge = y.float() - price
 
             mae_edge = torch.abs(pred_edge - true_edge).mean()
-            self.total_mae_edge += float(mae_edge) * n
+            mae_edge_val = float(mae_edge)
+            if not math.isnan(mae_edge_val):
+                self.total_mae_edge += mae_edge_val * n
+                self.total_mae_edge_n += n
 
             # Profitability metrics (tau=0: take when pred_edge > 0)
             # Use true_edge as realized profit (already accounts for bet direction)
             realized = true_edge
             take = pred_edge > 0
             if take.any():
-                self.pnl_sum += float(realized[take].sum())
-                self.take_sum += int(take.sum().item())
-                # Count trades that actually won (realized > 0)
-                self.win_sum += int((realized[take] > 0).sum().item())
+                pnl_val = float(realized[take].sum())
+                if not math.isnan(pnl_val):
+                    self.pnl_sum += pnl_val
+                    self.take_sum += int(take.sum().item())
+                    # Count trades that actually won (realized > 0)
+                    self.win_sum += int((realized[take] > 0).sum().item())
 
     def compute(self, prefix: str = "") -> dict[str, float]:
         """
@@ -156,15 +164,25 @@ class MetricsAccumulator:
 
         out = {
             f"{prefix}misclass": self.total_misclass / self.total_n,
+            f"{prefix}n_samples": self.total_n,
         }
 
-        # Only include BCE if loss was provided
-        if self.total_loss > 0:
-            out[f"{prefix}bce"] = self.total_loss / self.total_n
+        # Only include BCE if loss was provided (use separate counter for correct average)
+        if self.total_loss_n > 0:
+            out[f"{prefix}bce"] = self.total_loss / self.total_loss_n
+            out[f"{prefix}bce_n_samples"] = self.total_loss_n
+            if self.total_loss_n != self.total_n:
+                out[f"{prefix}bce_coverage"] = self.total_loss_n / self.total_n
 
         # Edge and profitability metrics (only if price was provided)
         if self._has_price:
-            out[f"{prefix}mae_edge"] = self.total_mae_edge / self.total_n
+            out[f"{prefix}mae_edge"] = (
+                self.total_mae_edge / self.total_mae_edge_n
+                if self.total_mae_edge_n > 0
+                else math.nan
+            )
+            if self.total_mae_edge_n > 0 and self.total_mae_edge_n != self.total_n:
+                out[f"{prefix}mae_edge_coverage"] = self.total_mae_edge_n / self.total_n
             out[f"{prefix}baseline_misclass"] = self.total_baseline_misclass / self.total_n
 
             # Profitability metrics (tau=0)
@@ -201,8 +219,10 @@ class MetricsAccumulator:
     def reset(self):
         """Reset all accumulators."""
         self.total_loss = 0.0
+        self.total_loss_n = 0
         self.total_misclass = 0.0
         self.total_mae_edge = 0.0
+        self.total_mae_edge_n = 0
         self.total_baseline_misclass = 0.0
         self.total_n = 0
         self._has_price = False
