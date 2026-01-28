@@ -21,98 +21,17 @@ By encoding both sequences and allowing them to interact via cross-attention, th
 
 ## Architecture Diagram
 
-```
-┌──────────────────────────────────────────────────────────────────────────────────┐
-│                          DualEncoderTransformer                                   │
-└──────────────────────────────────────────────────────────────────────────────────┘
-                    │                                       │
-                    ▼                                       ▼
-┌────────────────────────────────────┐   ┌────────────────────────────────────────┐
-│         MARKET ENCODER             │   │            USER ENCODER                │
-│                                    │   │                                        │
-│  Input: (B, L_market, D_market)    │   │  Input: (B, L_user, D_user)            │
-│  L_market = 1024, D_market = 12    │   │  L_user = 128, D_user = 4              │
-│                                    │   │                                        │
-│  ┌──────────────────────────────┐  │   │  ┌──────────────────────────────────┐  │
-│  │ Input Projection             │  │   │  │ Input Projection                 │  │
-│  │ Linear(12 → d_model)         │  │   │  │ Linear(4 → d_model)              │  │
-│  └──────────────────────────────┘  │   │  └──────────────────────────────────┘  │
-│              │                     │   │              │                         │
-│              ▼                     │   │              ▼                         │
-│  ┌──────────────────────────────┐  │   │  ┌──────────────────────────────────┐  │
-│  │ Positional Embeddings        │  │   │  │ Positional Embeddings            │  │
-│  │ Learned (max_seq_len)        │  │   │  │ Learned (max_seq_len)            │  │
-│  └──────────────────────────────┘  │   │  └──────────────────────────────────┘  │
-│              │                     │   │              │                         │
-│              ▼                     │   │              ▼                         │
-│  ┌──────────────────────────────┐  │   │  ┌──────────────────────────────────┐  │
-│  │ Transformer Encoder          │  │   │  │ Transformer Encoder              │  │
-│  │ • n_market_layers            │  │   │  │ • n_user_layers                  │  │
-│  │ • CAUSAL attention           │  │   │  │ • BIDIRECTIONAL attention        │  │
-│  │ • Pre-LN, GELU               │  │   │  │ • Pre-LN, GELU                   │  │
-│  └──────────────────────────────┘  │   │  └──────────────────────────────────┘  │
-│              │                     │   │              │                         │
-│              ▼                     │   │              ▼                         │
-│  ┌──────────────────────────────┐  │   │  ┌──────────────────────────────────┐  │
-│  │ Final LayerNorm              │  │   │  │ Final LayerNorm                  │  │
-│  └──────────────────────────────┘  │   │  └──────────────────────────────────┘  │
-│              │                     │   │              │                         │
-│              ▼                     │   │              ▼                         │
-│  h_market: (B, L_market, d_model)  │   │  h_user: (B, L_user, d_model)          │
-└────────────────────────────────────┘   └────────────────────────────────────────┘
-                    │                                       │
-                    └───────────────────┬───────────────────┘
-                                        │
-                                        ▼
-                    ┌────────────────────────────────────────┐
-                    │       CROSS-ATTENTION MODULE           │
-                    │                                        │
-                    │  ┌──────────────────────────────────┐  │
-                    │  │ Market → User Cross-Attention    │  │
-                    │  │ Q: h_market[-1]  (last token)    │  │
-                    │  │ K, V: h_user     (all tokens)    │  │
-                    │  │                                  │  │
-                    │  │ "What user patterns relate to    │  │
-                    │  │  the current market state?"      │  │
-                    │  └──────────────────────────────────┘  │
-                    │              │                         │
-                    │              ▼                         │
-                    │  ┌──────────────────────────────────┐  │
-                    │  │ User → Market Cross-Attention    │  │
-                    │  │ Q: h_user (mean pooled)          │  │
-                    │  │ K, V: h_market (all tokens)      │  │
-                    │  │                                  │  │
-                    │  │ "What market patterns match      │  │
-                    │  │  this user's trading style?"     │  │
-                    │  └──────────────────────────────────┘  │
-                    │              │                         │
-                    │              ▼                         │
-                    │  h_cross: (B, d_model)                 │
-                    └────────────────────────────────────────┘
-                                        │
-                                        ▼
-                    ┌────────────────────────────────────────┐
-                    │           FUSION LAYER                 │
-                    │                                        │
-                    │  Inputs:                               │
-                    │  • h_market_last: (B, d_model)         │
-                    │  • h_user_pooled: (B, d_model)         │
-                    │  • h_cross:       (B, d_model)         │
-                    │                                        │
-                    │  Concat → Linear(3d → d) → GELU → Drop │
-                    │                                        │
-                    │  Output: h_fused (B, d_model)          │
-                    └────────────────────────────────────────┘
-                                        │
-                                        ▼
-                    ┌────────────────────────────────────────┐
-                    │       CLASSIFICATION HEAD              │
-                    │                                        │
-                    │  Linear(d → d) → GELU → Dropout        │
-                    │  → Linear(d → 1)                       │
-                    │                                        │
-                    │  Output: logits (B,)                   │
-                    └────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    MX["market_x"] --> ME["Market Encoder<br>(causal Transformer)"]
+    ME --> HL["h_market_last<br>(last token)"]
+    UX["user_x"] --> UE["User Encoder<br>(bidirectional Transformer)"]
+    HL --> CA["Cross-Attn<br>(market ↔ user)"] & F["Fusion"]
+    UE --> HP["h_user_pooled<br>(mean pool)"]
+    HP --> CA & F
+    F --> CLF["Classifier"]
+    CLF --> LOG["logits"]
+    CA --> F
 ```
 
 ---
@@ -420,9 +339,3 @@ polyquant/
 ```
 
 ---
-
-## References
-
-- Vaswani et al., "Attention Is All You Need" (2017)
-- Radford et al., "Language Models are Unsupervised Multitask Learners" (GPT-2)
-- Devlin et al., "BERT: Pre-training of Deep Bidirectional Transformers"
