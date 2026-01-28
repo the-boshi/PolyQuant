@@ -12,7 +12,6 @@
 - [Training](#training)
 - [Evaluation](#evaluation)
 - [Configuration](#configuration)
-- [Notebooks](#notebooks)
 - [Documentation](#documentation)
 
 ---
@@ -103,8 +102,6 @@ PolyQuant/
 │   ├── training/                  # Training scripts
 │   │   ├── train_mlp.py           # MLP training
 │   │   ├── train_resnet.py        # ResNet training
-│   │   ├── train_transformer.py   # Transformer (market outcome prediction)
-│   │   ├── train_trade_transformer.py  # TradeTransformer (per-trade prediction)
 │   │   ├── train_dual_encoder.py  # Dual-Encoder training
 │   │   └── train_transformer_no_user.py # Transformer without user features
 │   │
@@ -165,14 +162,8 @@ PolyQuant/
 │
 ├── runs/                          # TensorBoard/W&B logs
 │
-├── notebooks/                     # Jupyter notebooks
-│   ├── statistics.ipynb           # EDA and feature validation
-│   ├── dataloader_test.ipynb      # Data loader debugging
-│   └── sequence_dataset_benchmark.ipynb  # Dataset performance testing
-│
 └── docs/                          # Documentation
     ├── DUAL_ENCODER_TRANSFORMER.md    # Dual-encoder architecture details
-    ├── TRADE_TRANSFORMER.md           # Trade transformer architecture
     └── DIGITALOCEAN_GPU_SETUP.md      # Cloud GPU setup guide
 ```
 
