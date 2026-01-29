@@ -28,14 +28,15 @@ Given information available at the time of a trade, the goal is to predict the *
 y = 1 if market resolves YES, 0 if market resolves NO
 ```
 
-The model outputs a probability estimate `p = P(outcome = YES | features)`.
+The model outputs a probability estimate `p = P(outcome = YES)`.
 
-From this prediction, we can compute the **trading edge**:
-```
-edge = p − trade_price
-```
+### Tabular vs sequential data
 
-Where `edge > 0` indicates the model believes the trade is underpriced (potentially profitable).
+We consider two model types - sequential transformers and MLP. For each there is a dedicated pipeline for creating and loading the data.  
+The tabular data is extracted from an SQL database into parquet files, using scripts in `polyquant_features`. The sequential data is only a re-indexing of the same data, using different scripts in the same folder.  
+Data loaders for each model can be found under `polyquant/data/datasets/`. 
+
+The data itself, which is of the order of 30Gb, if not included in the git.
 
 ### What This Repository Includes
 
@@ -44,30 +45,6 @@ Where `edge > 0` indicates the model believes the trade is underpriced (potentia
 - **Multiple Model Architectures**: MLP, ResNet, Transformer, and Dual-Encoder Transformer
 - **Training & Evaluation**: Complete training loops with W&B logging, checkpointing, and comprehensive metrics
 - **Profitability Metrics**: Beyond accuracy—measures actual trading profit potential
-
----
-
-## Key Features
-
-### Feature Categories
-
-Each trade is transformed into ~40+ features across multiple categories:
-
-| Category | Features | Description |
-|----------|----------|-------------|
-| **Trade-Local** | price, log_usdc_size, outcome_index, time_of_day_sin/cos | Information about the specific trade |
-| **User-Global** | total_trades, total_volume, days_active, avg_size, pnl_stats | Lifetime statistics for the trader |
-| **Market-Level** | total_trades, total_volume, last_price_yes | Market-wide statistics |
-| **Rolling 1h Window** | volume_1h, unique_traders_1h, volatility_1h | Recent market activity |
-| **User-in-Market** | user_usdc_1h_in_market, user_trades_1h_in_market | User's recent activity in this market |
-| **Temporal** | seconds_since_open, time_since_last_trade | Time-based context |
-
-### Causal Feature Engineering
-
-All features are computed **causally**—using only information available at the time of each trade:
-- PnL statistics only include realized profits from markets that have already closed
-- Rolling windows are computed on past trades only
-- No future information leakage
 
 ---
 
@@ -103,7 +80,7 @@ PolyQuant/
 │   │   ├── train_mlp.py           # MLP training
 │   │   ├── train_resnet.py        # ResNet training
 │   │   ├── train_dual_encoder.py  # Dual-Encoder training
-│   │   └── train_transformer_no_user.py # Transformer without user features
+│   │   └── train_transformer_no_user.py # Market level transformer
 │   │
 │   ├── evaluation/                # Evaluation scripts
 │   │   ├── eval_resnet.py         # ResNet evaluation
@@ -154,13 +131,13 @@ PolyQuant/
 │       ├── val/                   # Validation user sequences
 │       └── test/                  # Test user sequences
 │
-├── checkpoints/                   # Model checkpoints (by run timestamp)
+├── checkpoints/                   # Model checkpoints (not in git)
 │   └── YYYYMMDD_HHMMSS_<model>/
 │       ├── best.pt                # Best validation checkpoint
 │       ├── latest.pt              # Latest checkpoint
 │       └── config.json            # Training configuration
 │
-├── runs/                          # TensorBoard/W&B logs
+├── runs/                          # W&B logs (not in git)
 │
 └── docs/                          # Documentation
     ├── DUAL_ENCODER_TRANSFORMER.md    # Dual-encoder architecture details
