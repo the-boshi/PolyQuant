@@ -1,20 +1,4 @@
-# PolyQuant — Market Outcome Prediction for Prediction Markets
-
-
-## Table of Contents
-
-- [Overview](#overview)
-- [Key Features](#key-features)
-- [Project Structure](#project-structure)
-- [Installation](#installation)
-- [Data Pipeline](#data-pipeline)
-- [Models](#models)
-- [Training](#training)
-- [Evaluation](#evaluation)
-- [Configuration](#configuration)
-- [Documentation](#documentation)
-
----
+# PolyQuant — Predicting Prediction Market Outcomes from Trading Data
 
 ## Overview
 
